@@ -159,13 +159,13 @@ for i=3:length(dir_list),
             '%s/seleccionadas-%s.txt', nextfile_str, ...
             funciones_eval{funcion}), 'w');
         fprintf(seleccionadas_file, ...
-            '%G\t%G\t%G\t%G\t%G\n', so, s2, s4, s8, sth, spf);
+            '%G\t%G\t%G\t%G\t%G\t%G\n', so, s2, s4, s8, sth, spf);
         fclose(seleccionadas_file);
 
         tiempo_file = fopen(sprintf('%s/tiempos-%s.txt', ...
             nextfile_str, funciones_eval{funcion}), 'w');
         fprintf(tiempo_file, ...
-            '%G\t%G\t%G\t%G\t%G\n', to, t2, t4, t8, tth, tpf);
+            '%G\t%G\t%G\t%G\t%G\t%G\n', to, t2, t4, t8, tth, tpf);
         fclose(tiempo_file);    
 
         t_total = t_total + to + t2 + t4 + t8 + tth + tpf;
