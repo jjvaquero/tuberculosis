@@ -1,0 +1,1944 @@
+
+
+; Clasificador Bayesiano para dos clases
+
+; mat_training - Matriz de las muestras de entrenamiento. Formato Float
+;			   - Cada fila es un parámetro. Tamaño n_params*n_samples
+;				 (para obtener la función densidad de probabilidad gaussiana multivarida
+;
+; mat_data     - Matriz de las muestras a clasificar. Tamaño n_params*n_data
+;
+; arr_classes  - Etiquetas de los datos de entrenamiento (número de clase)
+;              - Valor entero, tamaño 1*n_samples
+;			   - Las etiquetas son = 0,1, para dos clases, 0,1,2,3 ...
+;
+; WEIGHTS - array de pesos de parámetros, tamaño n_params
+;
+;
+;--------------------------------------------------------------------
+
+FUNCTION classify_bayesian, mat_training, mat_data, arr_classes, WEIGTHS=weights
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+IF N_ELEMENTS(weights) EQ 0 THEN BEGIN
+	arr_weight = FLTARR(n_param) +1.0
+ENDIF ELSE BEGIN
+	IF N_ELEMENTS(weights) NE n_param THEN BEGIN
+		PRINT, 'datos incorrectos'
+		RETURN, -1
+	ENDIF
+	arr_weight = weights
+ENDELSE
+
+arr_sal_class = INTARR(1, n_samples)
+
+samples_c1 = WHERE(arr_classes EQ 0, count_c1)
+samples_c2 = WHERE(arr_classes EQ 1, count_c2)
+
+IF (count_c1 LT 2) OR (count_c2 LT 2) THEN BEGIN
+	PRINT, 'Insuficientes datos de una clase'
+	RETURN, -1
+ENDIF
+
+PRINT, count_c2, count_c1
+
+mat_train_c1 = mat_training[*, samples_c1]
+mat_train_c2 = mat_training[*, samples_c2]
+
+;------------------------------------------------------------------------
+; Obtienen los parámetros de la función gaussiana
+mat_gauss_c1 = Get_GaussianMultivariate(mat_train_c1)
+mat_gauss_c2 = Get_GaussianMultivariate(mat_train_c2)
+arr_mean_c1 = mat_gauss_c1[*,0]
+arr_mean_c2 = mat_gauss_c2[*,0]
+mat_covar_c1 = mat_gauss_c1[*,1:n_param]
+mat_covar_c2 = mat_gauss_c2[*,1:n_param]
+;------------------------------------------------------------------------
+;
+FOR i=0L, n_samples-1 DO BEGIN	; Procesa todas la muestras
+	IF (i MOD 200 EQ 0) THEN PRINT, i
+	sample = mat_data[*,i]*arr_weight
+	;------------------------
+	logprob_c1 = Value_GaussianMultivariate(sample, arr_mean_c1, mat_covar_c1, LOG=1)
+	logprob_c2 = Value_GaussianMultivariate(sample, arr_mean_c2, mat_covar_c2, LOG=1)
+	;------------------------
+	arr_sal_class[i] = logprob_c2 GT logprob_c1
+
+ENDFOR
+
+RETURN, arr_sal_class
+
+END
+; Clasificador Fuzzy Knn
+
+; mat_training - Matriz de las muestras de entrenamiento. Formato Float
+;			   - Cada fila es un parámetro. Tamaño n_params*n_samples
+;
+; mat_data     - Matriz de las muestras a clasificar. Tamaño n_params*n_data
+;
+; arr_classes  - Etiquetas de los datos de entrenamiento (número de clase)
+;              - Valor entero, tamaño 1*n_samples
+;			   - Las etiquetas son = 0,1, UNICAMENTE para dos clases
+;
+; N       - número de clases
+; K       - Número de vecinas computadas en el algoritmo knn
+; WEIGHTS - array de pesos de parámetros, tamaño n_params
+;
+; THRESHOLD - El umbral de decisión final de pertenencia: de 0 a 1
+; M_MULT    - La ponderación de la distancia en la modificación del knn "crisp"
+;
+; En este fuzzy knn se pondera la pertennecia a cada clase en función inversa
+; de la distancia euclídea a las muestras
+;
+;
+;--------------------------------------------------------------------
+
+
+FUNCTION classify_FuzzyKnn, mat_training, mat_data, arr_classes, K=k, N=n, WEIGTHS=weights, $
+							THRESHOLD = threshold, M_MULT=m_mult
+
+
+IF N_ELEMENTS(threshold) EQ 0 THEN threshold =0.5
+IF N_ELEMENTS(m_mult) EQ 0 THEN m_mult = 2
+
+opt_euclidean = 1	; Se trabahjará solamente con distancia euclídea
+
+
+tam1 = SIZE(mat_training)
+tam2 = SIZE(mat_data)
+
+n_training = tam1[2]
+n_samples  = tam2[2]
+
+IF n_training NE N_ELEMENTS(arr_classes) THEN BEGIN
+	PRINT, 'Datos incorrectos'
+	RETURN, -1
+ENDIF
+
+n_param = tam1[1]
+
+IF tam2[1] NE n_param THEN BEGIN
+	PRINT, 'datos incorrectos'
+	RETURN, -1
+ENDIF
+IF n_training NE N_ELEMENTS(arr_classes) THEN BEGIN
+	PRINT, 'datos incorrectos'
+	RETURN, -1
+ENDIF
+
+IF N_ELEMENTS(weights) EQ 0 THEN BEGIN
+	arr_weight = FLTARR(n_param) +1.0
+ENDIF ELSE BEGIN
+	IF N_ELEMENTS(weights) NE n_param THEN BEGIN
+		PRINT, 'datos incorrectos'
+		RETURN, -1
+	ENDIF
+	arr_weight = weights
+ENDELSE
+
+arr_sal_class = FLTARR(1, n_samples)
+
+;------------------------------------------------------------------------
+;Algoritmo K-nn
+
+FOR i=0L, n_samples-1 DO BEGIN	; Procesa todas la muestras
+	IF (i MOD 200 EQ 0) THEN PRINT, i
+	sample = mat_data[*,i]
+	;----------------------------------------------------
+	IF opt_euclidean EQ 1 THEN BEGIN
+		mat_sample = REBIN(sample, n_param, n_training)
+		mat_dist   = mat_training - mat_sample
+		arr_dist   = FLTARR(1, n_training)
+		FOR j=0L, n_training-1 DO BEGIN
+			arr_dist[j] = TOTAL(((mat_dist[*,j])^2)*arr_weight)
+		ENDFOR
+	ENDIF
+	;-----------------------------------------------------
+	; Devuelve el array de clases de las k más cercanas
+	pos_sortdis = SORT(arr_dist)
+	pos_sortk   = pos_sortdis[0:k-1]
+	arr_classk  = arr_classes[pos_sortk]
+	;histo_class = HISTOGRAM(arr_classk, MIN=0, MAX=n-1)
+	;class_max = MAX(histo_class)
+	;arr_sal_class[0,i] = (WHERE(histo_class EQ class_max))[0]
+
+	class_1 = WHERE(arr_classk EQ 0, ct1)
+	class_2 = WHERE(arr_classk EQ 1, ct2)
+
+	IF ct1 GT 0 THEN BEGIN
+		arr_dist_c1 = arr_dist[pos_sortk[class_1]]
+		value_1 = TOTAL(1/arr_dist_c1)
+	ENDIF ELSE BEGIN
+		arr_dist_c1 = [0]
+		value_1 = 0
+	ENDELSE
+	IF ct2 GT 0 THEN BEGIN
+		arr_dist_c2 = arr_dist[pos_sortk[class_2]]
+		value_2 = TOTAL(1/arr_dist_c2)
+	ENDIF ELSE BEGIN
+		arr_dist_c2 = [0]
+		value_2 = 0
+	ENDELSE
+
+	arr_sal_class[0,i] = value_2/(value_1 + value_2)
+
+ENDFOR
+
+RETURN, FIX(arr_sal_class GT threshold)
+
+END
+; Clasificador Knn
+
+; mat_training - Matriz de las muestras de entrenamiento. Formato Float
+;			   - Cada fila es un parámetro. Tamaño n_params*n_samples
+;
+; mat_data     - Matriz de las muestras a clasificar. Tamaño n_params*n_data
+;
+; arr_classes  - Etiquetas de los datos de entrenamiento (número de clase)
+;              - Valor entero, tamaño 1*n_samples
+;			   - Las etiquetas son = 0,1, para dos clases, 0,1,2,3 ...
+;
+; N       - número de clases
+; K       - Número de vecinas computadas en el algoritmo knn
+; WEIGHTS - array de pesos de parámetros, tamaño n_params
+; MAHALANOBIS - Por defecto calcula la distancia euclídea, pero con esta keyword
+;               lo hace por mahalanobis
+;
+;
+;--------------------------------------------------------------------
+
+
+FUNCTION classify_knn, mat_training, mat_data, arr_classes, K=k, N=n, WEIGTHS=weights, $
+						MAHALANOBIS=mahalanobis, EUCLIDEAN=euclidean
+
+IF KEYWORD_SET(mahalanobis) THEN opt_mahalanobis = 1 ELSE  opt_mahalanobis = 0
+IF KEYWORD_SET(euclidean)   THEN opt_euclidean   = 1 ELSE  opt_euclidean   = 0
+
+tam1 = SIZE(mat_training)
+tam2 = SIZE(mat_data)
+
+n_training = tam1[2]
+n_samples  = tam2[2]
+
+IF n_training NE N_ELEMENTS(arr_classes) THEN BEGIN
+	PRINT, 'Datos incorrectos'
+	RETURN, -1
+ENDIF
+
+n_param = tam1[1]
+
+IF tam2[1] NE n_param THEN BEGIN
+	PRINT, 'datos incorrectos'
+	RETURN, -1
+ENDIF
+IF n_training NE N_ELEMENTS(arr_classes) THEN BEGIN
+	PRINT, 'datos incorrectos'
+	RETURN, -1
+ENDIF
+
+IF N_ELEMENTS(weights) EQ 0 THEN BEGIN
+	arr_weight = FLTARR(n_param) +1.0
+ENDIF ELSE BEGIN
+	IF N_ELEMENTS(weights) NE n_param THEN BEGIN
+		PRINT, 'datos incorrectos'
+		RETURN, -1
+	ENDIF
+	arr_weight = weights
+ENDELSE
+
+arr_sal_class = INTARR(1, n_samples)
+
+;------------------------------------------------------------------------
+IF opt_mahalanobis EQ 1 THEN BEGIN	; Calcula la matriz de covarianzas
+	samples_c1 = WHERE(arr_classes EQ 0, count_c1)
+	samples_c2 = WHERE(arr_classes EQ 1, count_c2)
+
+	IF (count_c1 LT 2) OR (count_c2 LT 2) THEN BEGIN
+		PRINT, 'Insuficientes datos de una clase'
+		RETURN, -1
+	ENDIF
+
+	mat_train_c1 = mat_training[*, samples_c1]
+	mat_train_c2 = mat_training[*, samples_c2]
+
+	mat_covars1 = CORRELATE(mat_train_c1, /COVARIANCE, /DOUBLE)*(count_c1-1)/count_c1
+	mat_covars2 = CORRELATE(mat_train_c2, /COVARIANCE, /DOUBLE)*(count_c2-1)/count_c2
+	mat_inv1 = INVERT(mat_covars1, status1, /DOUBLE)
+	mat_inv2 = INVERT(mat_covars2, status2, /DOUBLE)
+	IF (status1 EQ 1 OR status2) EQ 1 THEN BEGIN
+		PRINT, 'Inversion imposible'
+		RETURN, -1
+	ENDIF
+
+ENDIF
+
+
+;------------------------------------------------------------------------
+;Algoritmo K-nn
+
+FOR i=0L, n_samples-1 DO BEGIN	; Procesa todas la muestras
+	IF (i MOD 200 EQ 0) THEN PRINT, i
+	sample = mat_data[*,i]
+	;----------------------------------------------------
+	IF opt_euclidean EQ 1 THEN BEGIN
+		mat_sample = REBIN(sample, n_param, n_training)
+		mat_dist   = mat_training - mat_sample
+		arr_dist   = FLTARR(1, n_training)
+		FOR j=0L, n_training-1 DO BEGIN
+			arr_dist[j] = TOTAL(((mat_dist[*,j])^2)*arr_weight)
+		ENDFOR
+	ENDIF
+	IF opt_mahalanobis EQ 1 THEN BEGIN
+		arr_dist   = FLTARR(1, n_training)
+		FOR j=0L, n_training-1 DO BEGIN
+			vect_1 = mat_training[j]-sample
+			IF arr_classes[j] EQ 0 THEN $
+				arr_dist[j] = vect_1##mat_inv1##REFORM(vect_1, 1, n_param) $
+			ELSE $
+				arr_dist[j] = vect_1##mat_inv2##REFORM(vect_1, 1, n_param)
+		ENDFOR
+	ENDIF
+	;-----------------------------------------------------
+	; Devuelve el array de clases de las k más cercanas
+	pos_sortdis = SORT(arr_dist)
+	pos_sortk  = pos_sortdis[0:k-1]
+	arr_classk = arr_classes[pos_sortk]
+	histo_class = HISTOGRAM(arr_classk, MIN=0, MAX=n-1)
+
+	class_max = MAX(histo_class)
+
+	arr_sal_class[0,i] = (WHERE(histo_class EQ class_max))[0]
+ENDFOR
+
+RETURN, arr_sal_class
+
+END
+; Clasificador por discriminante lineal entre dos clases
+
+
+; mat_data     - Matriz de las muestras a clasificar. Tamaño n_params*n_data
+;
+; arr_discriminant  - Valores de la función lineal discriminante. El primero
+;                     es el término independiente seguido de otros n_params términos
+;
+;
+; WEIGHTS - array de pesos de parámetros (multiplicaciones de los valores
+;           antes de clasificar) tamaño n_params
+;
+;
+;--------------------------------------------------------------------
+
+FUNCTION classify_Lineardiscriminant ,mat_data, arr_discriminant, WEIGTHS=weights
+
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+IF (n_param + 1) NE N_ELEMENTS(arr_discriminant) THEN BEGIN
+	PRINT, 'datos incorrectos'
+	RETURN, -1
+ENDIF
+
+IF N_ELEMENTS(weights) EQ 0 THEN BEGIN
+	arr_weight = FLTARR(n_param) +1.0
+ENDIF ELSE BEGIN
+	IF N_ELEMENTS(weights) NE n_param THEN BEGIN
+		PRINT, 'datos incorrectos'
+		RETURN, -1
+	ENDIF
+	arr_weight = weights
+ENDELSE
+
+arr_sal_class = INTARR(1, n_samples)
+
+;------------------------------------------------------------------------
+; Discriminante lineal
+
+FOR i=0L, n_samples-1 DO BEGIN	; Procesa todas la muestras
+	IF (i MOD 200 EQ 0) THEN PRINT, i
+	sample = mat_data[*,i]*arr_weight
+	;------------------------
+	result = TOTAL(sample*arr_discriminant[1:n_param-1]) + arr_discriminant[0]
+	;------------------------
+	arr_sal_class[i] = result GE 0
+
+ENDFOR
+
+RETURN, arr_sal_class
+
+END
+
+;--------------------------------------------------------------------
+;
+; Esta función retorna una matriz de momentos invariantes derivados
+; de los fundamentales de orden >= 3
+;
+; La matriz de datos inicial es:
+;
+; [m11, m20, m02, m21, m12, m30, m03]
+;
+;--------------------------------------------------------------------
+
+FUNCTION data_invariantmoments, mat_data
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+IF n_param NE 7 THEN RETURN, -1
+
+m11 = mat_data[0,*]
+m20 = mat_data[1,*]
+m02 = mat_data[2,*]
+m21 = mat_data[3,*]
+m12 = mat_data[4,*]
+m30 = mat_data[5,*]
+m03 = mat_data[6,*]
+
+;-------------------------------
+
+u1 = m20 + m02
+
+u2 = (m20 - m02)^2 + 4*(m11^2)
+
+u3 = (m30 - 3*m12)^2 + (m03 - 3*m21)^2
+
+u4 = (m30 + m12)^2 + (m03 + m21)^2
+
+u5 =    (m30 - 3*m12)*(m30 + m12)*((m30 + m12)^2 - 3*((m03 + m21)^2)) + $
+		(3*m21 - m03)*(m03 + m21)*(3*((m30 + m12)^2)- (m03 + m21)^2)
+
+u6 = (m20 - m02)*((m30 + m12)^2 - (m21 + m03)^2) + 4*m11*(m30 + m12)*(m03 + m21)
+
+u7 = 	(3*m21 - m03)*(m30 + m12)*((m30 + m12)^2 -3*((m21 + m03)^2)) - $
+		(m30 - 3*m12)*(m21 + m03)*(3*((m30 + m12)^2) -(m21 + m03)^2)
+
+
+RETURN, [u1,u2,u3,u4,u5,u6,u7]
+
+
+END
+
+;--------------------------------------------------------------------
+;
+; Esta función toma como entrada una matriz de características (formato habitual)
+; y un array de clases (dos clases, 1 y 2)
+; Y retorma el parámetro Lambda de Wilks como indicador de la discriminación de
+; las características (entre 0 y 1, cuando más cerca esté de cero, mayor es el poder discriminante)
+; o bien el vector discriminante de Fisher, o las matrices Sb o Sw
+; ;
+;--------------------------------------------------------------------
+
+;mat_data = DOUBLE(RANDOMN(3, 6,14))*10
+;arr_classes = INTARR(14)
+;arr_classes[6:13]=1
+;ok = data_lambdawilks(mat_data, arr_classes, /FISHER)
+
+FUNCTION data_LambdaWilks, mat_data, arr_classes, FISHER=fisher, WILKS=wilks, TRAC=trac
+
+;--------------------------------------------------------------------
+
+IF KEYWORD_SET(fisher) THEN opt_fisher = 1 ELSE opt_fisher = 0
+IF KEYWORD_SET(wilks)  THEN opt_wilks  = 1 ELSE opt_wilks  = 0
+IF KEYWORD_SET(trac)   THEN opt_trac   = 1 ELSE opt_trac   = 0
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+IF n_param LE 1 THEN RETURN, -1
+
+IF N_ELEMENTS(arr_classes) NE n_samples THEN BEGIN
+	PRINT, 'Datos erróneos de entrada'
+	RETURN, -1
+ENDIF
+
+pos_class_1 = WHERE(arr_classes EQ 0, ct1)
+pos_class_2 = WHERE(arr_classes EQ 1, ct2)
+
+IF (ct1 EQ 0) OR (ct2 EQ 0) THEN BEGIN
+	PRINT, 'Datos erróneos de entrada'
+	RETURN, -1
+ENDIF
+
+mat_class_1 = mat_data[*, pos_class_1]
+mat_class_2 = mat_data[*, pos_class_2]
+
+
+matrix_within_1 = CORRELATE(mat_class_1, /COVARIANCE, /DOUBLE)*(n_param-1)
+matrix_within_2 = CORRELATE(mat_class_1, /COVARIANCE, /DOUBLE)*(n_param-1)
+
+;---------------------------------------------------------------------------
+;matrix_within_1 = DBLARR(n_param, n_param)
+;matrix_within_2 = DBLARR(n_param, n_param)
+arr_means_1 = DBLARR(n_param)
+arr_means_2 = DBLARR(n_param)
+FOR i=0L, n_param-1 DO BEGIN
+	arr_means_1[i] = MEAN(mat_class_1[i,*], /DOUBLE)
+	arr_means_2[i] = MEAN(mat_class_2[i,*], /DOUBLE)
+ENDFOR
+;FOR i=0L, n_param-1 DO BEGIN
+;	FOR j=0L, n_param-1 DO BEGIN
+;		matrix_within_1[i,j] = TOTAL((mat_class_1[i,*]-arr_means_1[i])*(mat_class_1[j,*]-arr_means_1[j]))
+;		matrix_within_2[i,j] = TOTAL((mat_class_2[i,*]-arr_means_2[i])*(mat_class_2[j,*]-arr_means_2[j]))
+;	ENDFOR
+;ENDFOR
+;--------------------------------------------------------------------------
+
+matrix_within  = matrix_within_1+matrix_within_2
+
+arr_diffmeans  = arr_means_1-arr_means_2
+
+matrix_between = REFORM(arr_diffmeans, 1, n_param)##arr_diffmeans
+
+IF opt_fisher EQ 1 THEN BEGIN
+	arr_fisher = INVERT(matrix_between, /DOUBLE)##REFORM(arr_diffmeans, 1, n_param)
+	RETURN, arr_fisher
+ENDIF
+
+IF opt_wilks EQ 1 THEN BEGIN
+	IF opt_trac EQ 1 THEN BEGIN
+		trace_within  = TRACE(matrix_within)
+		trace_between = TRACE(matrix_between)
+
+		lambda_wilks = trace_within/(trace_within+trace_between)
+	ENDIF ELSE BEGIN
+
+		determ_within  = DETERM(matrix_within,  /DOUBLE, /CHECK)
+		determ_between = DETERM(matrix_between, /DOUBLE ,/CHECK)
+
+		lambda_wilks = determ_within/(determ_within+determ_between)
+	ENDELSE
+
+	RETURN, lambda_wilks
+ENDIF
+
+RETURN, -1
+
+END
+
+;--------------------------------------------------------------------
+;
+; Esta función transforma la matriz de datos (formato habitual) según una
+; matriz de covarianza utilizando el método de componentes principales
+; Elige los "n_dim" componentes principales
+;--------------------------------------------------------------------
+
+
+FUNCTION data_PCA, mat_data, mat_covar, N_DIM=n_dim
+
+;--------------------------------------------------------------------
+
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+tam2 = SIZE(mat_covar)
+
+IF n_param LE 1 THEN RETURN, -1
+
+IF tam2[2] NE n_param THEN RETURN, -1
+IF tam2[1] NE n_param THEN RETURN, -1
+
+IF N_ELEMENTS(n_dim) EQ 0 THEN n_dim = n_param
+
+IF n_dim GT n_param THEN RETURN, -1
+
+arr_eigenvalues = HQR(ELMHES(mat_covar), /DOUBLE)
+mat_eigenvectors = EIGENVEC(mat_covar,arr_eigenvalues, /DOUBLE)
+
+arr_eigenvalues  = FLOAT(arr_eigenvalues)
+mat_eigenvectors = FLOAT(mat_eigenvectors)
+
+;---------------------------------------------------------------------;
+
+arr_means = DBLARR(n_param)
+
+FOR i=0L, n_param-1 DO BEGIN
+	arr_means[i] = MEAN(mat_data[i,*], /DOUBLE)
+	mat_data[i,*] = mat_data[i,*]-arr_means[i]
+ENDFOR
+
+;---------------------------------------------------------------------
+
+arr_sort = REVERSE(SORT(arr_eigenvalues))
+
+mat_transpose = TRANSPOSE(mat_eigenvectors)
+
+mat_bigger = mat_transpose(*,arr_sort[0:n_dim-1])
+
+;---------------------------------------------------------------------
+
+mat_result = FLTARR(n_dim, n_samples)
+
+FOR i=0L, n_samples - 1 DO BEGIN
+	mat_result[*,i] = mat_bigger##REFORM(mat_data[*,i], 1, n_param)
+ENDFOR
+
+RETURN, mat_result
+
+END
+
+;--------------------------------------------------------------------
+;
+; Esta función toma como entrada una característica y un arra de clases (dos clases, 1 y 2)
+; Y retorma el parámetro de diferencia de medias entre suma de varianzas
+; Cuanto mayor sea el valor ,más separados estarán los clusters (más discriminación)
+;
+;
+;ok = data_lambdawilks(mat_data, arr_classes, /FISHER)
+
+FUNCTION data_SingleFeature, arr_data, arr_classes
+
+;--------------------------------------------------------------------
+
+n_samples  = N_ELEMENTS(arr_data)
+
+
+IF N_ELEMENTS(arr_classes) NE n_samples THEN BEGIN
+	PRINT, 'Datos erróneos de entrada'
+	RETURN, -1
+ENDIF
+
+pos_class_1 = WHERE(arr_classes EQ 0, ct1)
+pos_class_2 = WHERE(arr_classes EQ 1, ct2)
+
+IF (ct1 EQ 0) OR (ct2 EQ 0) THEN BEGIN
+	PRINT, 'Datos erróneos de entrada'
+	RETURN, -1
+ENDIF
+
+arr_class_1 = arr_data[pos_class_1]
+arr_class_2 = arr_data[pos_class_2]
+
+
+;-------------------------------------------------
+var_1 = varianza(arr_class_1)
+var_2 = varianza(arr_class_2)
+
+mean_1 = MEAN(arr_class_1)
+mean_2 = MEAN(arr_class_2)
+
+result = ABS(mean_1 - mean_2)/ABS(var_1 + var_2)
+
+RETURN, result
+
+END
+
+;--------------------------------------------------------------------
+;
+; Esta función toma como entrada una matriz de parámetros (formato habitual)
+; Y retorma un array de pesos para esos parámetros
+; Resultado dependiente de la opción elegida
+;
+; Transformaciones para clustering t ordenación paramétrica
+;
+;--------------------------------------------------------------------
+
+FUNCTION data_weights, mat_data, OPTION=option
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+arr_vars    = FLTARR(n_param)
+arr_weights = FLTARR(n_param)
+
+IF KEYWORD_SET(option) THEN opt = option ELSE opt = 1
+
+
+;--------------------------------------------------------
+IF opt EQ 1 THEN BEGIN
+
+	FOR i=0L, n_param-1 DO BEGIN
+		arr_vars[i] = varianza(mat_data[i,*])
+	ENDFOR
+
+	totvar1 = TOTAL(1/arr_vars)
+
+	FOR i=0L, n_param-1 DO BEGIN
+		arr_weights[i] = 1/(arr_vars[i]*totvar1)
+	ENDFOR
+
+ENDIF
+;--------------------------------------------------------
+;--------------------------------------------------------
+IF opt EQ 2 THEN BEGIN
+
+	totvar2 = DOUBLE(1)
+
+	FOR i=0L, n_param-1 DO BEGIN
+		arr_vars[i] = varianza(mat_data[i,*])
+		totvar2 = totvar2*arr_vars[i]
+	ENDFOR
+
+	torvar2 = torvar2^(1d/n_param)
+
+	FOR i=0L, n_param-1 DO BEGIN
+		arr_weights[i] = (1/arr_vars[i])*totvar2
+	ENDFOR
+
+ENDIF
+;--------------------------------------------------------
+
+
+
+RETURN, arr_weights
+
+END
+
+PRO fbat_classify_allmethods
+
+;fbat_classify_allmethods
+
+;------------------------------------------------------------------------------
+;
+; Función general de clasificación estadística para datos de entrada de parámetros
+; leidos de archivos de texto en el formato creado por "write_SPSS_archive_2.pro"
+; Y similares
+;
+; Lee archivos y en función de las keywords internas calcula varias clasificaciones:
+;  - Bayesiana clásica
+;  - Knn
+;  - Discriminante lineal (previamente calculado con SPSS)
+;
+; - También elige los parámetros que se van a utilizar
+;
+;------------------------------------------------------------------------------
+;-------------------------------------------------------
+; Las características que se corresponden a lass columnas,
+;en archivos tipo iSAM :
+;
+; momentos = 29:39
+; todos = 4:39
+;
+; 0 = 'culture'  - Identificador STRING de cultivo
+; 1 = 'n_image'  - Número de imagen
+; 2 = 'index'    - Número de región (bacilo o negativo)
+; 3 = 'class'    - Identificador de clase (0: negativo, no marcado, 1:positivo, marcado)
+; 4 = 'size'     - Tamaño (área)
+; 5 = 'perim'    - Perímetro
+; 6 = 'mean_r'   - Media del canal rojo
+; 7 = 'mean_g'   - Media del canal verde
+; 8 = 'mean_b'   - Media del canal azul
+; 9 = 'stdv_r'   - Desviación estándar del canal rojo
+;10 = 'stdv_g'   - Desviación estándar del canal verde
+;11 = 'stdv_b'   - Desviación estándar del canal azul
+;12 = 'origin_x' - Posición del bacilo en x
+;13 = 'origin_y' - Posición del bacilo en y
+;14 = 'cmass_x'  - Centro de masas de la máscara binaria, relativo en x
+;15 = 'cmass_y'  - Centro de masas de la máscara binaria, relativo en y
+;16 = 'gcmass_x' - Centro de masas del canal verde, relativo en x
+;17 = 'gcmass_y' - Centro de masas del canal verde, relativo en y
+;18 = 'longdim'  - Diatancia máxima entre píxeles de la región
+;19 = 'thinness' - Delgadez, mediante autovalores de la matriz de momentos (+delgado, -thinness)
+;20 = 'angle'    - Angulo, mediante matriz de momentos
+;21 = 'ffactor'  - Factor de forma:  (4.0*!PI*area)/(perimeter^2)
+;22 = 'feretd'   - Diámetro de Feret: SQRT((4.0*area)/!PI)
+;23 = 'compact'  - Compactación:  diámetro de feret/distancia máxima en la forma
+;24 = 'maxr'     - Distancia máxima de un punto al centro de masas
+;25 = 'minr'     - Distancia mínima de un punto al centro de masas
+;26 = 'maxdist'  - Distancia máxima de un píxel al fondo
+;27 = 'rectness' - Rectangularidad (relación entre el área y la de el rectángulo menor circunscrito)
+;28 = 'm11'      - Momentos (i,j) (en imagen de gris del canal verde)
+;29 = 'm20'
+;30 = 'm02'
+;31 = 'm21'
+;32 = 'm12'
+;33 = 'm30'
+;34 = 'm03'
+;35 = 'm22'
+;36 = 'm31'
+;37 = 'm13'
+;38 = 'm40'
+;39 = 'm04'
+;-------------------------------------------------------
+
+;------------------
+
+opt_bayes  = 0
+opt_knn    = 0
+opt_linear = 1
+
+n_knn = 3
+
+opt_changetrain  = 1
+opt_detecterrors = 0
+opt_normalize    = 1
+
+opt_mahalanobis = 0
+opt_euclidean   = 1
+
+opt_weights = 1
+
+opt_invariant = 1
+
+opt_mostdiscriminants = 1
+opt_pca = 1
+n_good = 20	; Los 20 más discriminantes
+n_pca  =  8 ; Análisis de componentes principales de 20
+
+;------------------
+
+str_disk1 = 'e:\'
+str_path1 = 'micro\results\files_tab_training\'
+str_file1 = 'Tabfile_training_iSAM_class01.txt'       ; Entrenamiento
+;str_file1 = 'Tabfile_training_iSAM_class01_norm.txt'  ; Entrenamiento
+
+str_disk2 = 'e:\'
+str_path2 = 'micro\results\files_tab_test\'
+str_file2 = 'Tabfile_test_iSAM_class01.txt'		    ; Test
+;str_file2 = 'Tabfile_test_iSAM_class01_norm.txt'   ; Entrenamiento
+
+path_file1 = str_disk1 + str_path1 + str_file1
+path_file2 = str_disk2 + str_path2 + str_file2
+
+
+; El conjunto de entrenamiento y el de test se pueden intercambiar,
+; menos en Discriminante lineal
+
+;--------------------------------------------------------
+str_names1   = read_spss_archive(path_file1, /NAMES)
+strmat_file1 = read_spss_archive(path_file1)
+
+;str_names2   = read_spss_archive(path_file2, /NAMES)
+strmat_file2 = read_spss_archive(path_file2)
+
+;str_names3   = read_spss_archive(path_file3, /NAMES)
+;strmat_file3 = read_spss_archive(path_file3)
+;--------------------------------------------------------
+
+tam1 = SIZE(strmat_file1)
+tam2 = SIZE(strmat_file2)
+n_samples1 = tam1[2] - 1
+n_samples2 = tam2[2] - 1
+strmat_file1 = strmat_file1[*,1:n_samples1]  ; Elimina los nombres
+strmat_file2 = strmat_file2[*,1:n_samples2]  ; Elimina los nombres
+
+;-------------------------------------------------------
+
+IF opt_linear EQ 1 THEN BEGIN
+	params_valid = [8,9,10,22,23,26,27,39]
+	;arr_discriminant =[0.0, 0.115, 0.352, 0.416, 0.458, -0.799, -0.209, 0.490, -0.264]
+	arr_discriminant = [-4.618, 0.005, 0.030, 0.045, 0.367, -7.752, -0.297, 9.079, 0.000]
+	opt_pca     = 0
+	opt_weights = 0
+	opt_mostdiscriminants = 0
+	opt_invariant = 0
+	opt_normalize = 0
+ENDIF ELSE BEGIN
+	params_valid = [4,5,6,7,8,9,10,11,14,15,16,17,18,19,21,22, $
+		23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]		;33 caracteristicas
+	;params_valid = [4,6,7,8,28,29,30,31,32,33,34,35,36,37,38]
+ENDELSE
+
+
+arr_classes1 = FIX(strmat_file1[3,*])
+mat_params1  = FLOAT(strmat_file1[params_valid,  *])
+mat_indexes1 = strmat_file1[0:2,  *]
+arr_classes2 = FIX(strmat_file2[3,*])
+mat_params2  = FLOAT(strmat_file2[params_valid,  *])
+mat_indexes2 = strmat_file2[0:2,  *]
+
+strarr_paramnames = str_names1[params_valid]
+
+;----------------------------
+PRINT, strarr_paramnames
+;----------------------------
+
+IF opt_changetrain EQ 0 THEN BEGIN
+	mat_training = mat_params1
+	mat_classify = mat_params2
+	mat_indexes  = mat_indexes2
+	arr_classtrain   = arr_classes1
+	arr_classmeasure = arr_classes2
+ENDIF ELSE BEGIN
+	mat_training = mat_params2
+	mat_classify = mat_params1
+	mat_indexes  = mat_indexes1
+	arr_classtrain   = arr_classes2
+	arr_classmeasure = arr_classes1
+ENDELSE
+
+
+n_param = (SIZE(mat_training))[1]
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+IF opt_invariant EQ 1 THEN BEGIN	;transforma los 6 primeros momentos en invariantes
+
+	pos_m11 = WHERE(strarr_paramnames EQ 'm11', ct)
+	IF ct EQ 0 THEN RETURN
+	pos_m11 = pos_m11[0]
+	mat_training_inv = data_invariantmoments(mat_training[pos_m11:pos_m11+6, *])
+	mat_classify_inv = data_invariantmoments(mat_classify[pos_m11:pos_m11+6, *])
+	mat_training = [mat_training, mat_training_inv]
+	mat_classify = [mat_classify, mat_classify_inv]
+	strarr_paramnames =[strarr_paramnames, 'inv1', 'inv2', 'inv3', 'inv4', 'inv5', 'inv6', 'inv7']
+
+ENDIF
+
+n_param = (SIZE(mat_training))[1]
+
+;-------------------------------------------------------
+
+IF opt_normalize EQ 1 THEN BEGIN
+	FOR i=0, n_param-1 DO BEGIN
+		mat_classify[i,*] = var_normalize_3(mat_classify[i,*])
+		mat_training[i,*] = var_normalize_3(mat_training[i,*])
+
+	ENDFOR
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; elección de los parámetros más discriminantes
+
+IF opt_mostdiscriminants THEN BEGIN
+	mat_classdis = DBLARR(n_param)
+	FOR i=0, n_param-1 DO BEGIN
+		mat_classdis[i] = data_singlefeature(mat_training[i,*], arr_classtrain)
+	ENDFOR
+	arr_sort = REVERSE(SORT(mat_classdis))
+	strarr_paramnames = strarr_paramnames[arr_sort[0:n_good-1]]
+	mat_classify = mat_classify[arr_sort[0:n_good-1],*]
+	mat_training = mat_training[arr_sort[0:n_good-1],*]
+
+	n_param = (SIZE(mat_training))[1]
+	;arr_weights = mat_classdis[arr_sort[0:n_good-1]]
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; Componentes principales
+
+IF opt_pca EQ 1 THEN BEGIN
+
+	mat_covar = CORRELATE(mat_training, /COVARIANCE, /DOUBLE)
+
+	mat_training = data_PCA(mat_training, mat_covar, N_DIM=n_pca)
+	mat_classify = data_PCA(mat_classify, mat_covar, N_DIM=n_pca)
+
+	n_param = (SIZE(mat_training))[1]
+
+	arr_weights = FLTARR(1, n_param) + 1.0
+
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+
+IF opt_weights EQ 1 THEN BEGIN
+	arr_weights = data_weights(mat_training, OPTION=1)
+ENDIF ELSE BEGIN
+	arr_weights = FLTARR(1, n_param) + 1.0
+ENDELSE
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+IF opt_bayes EQ 1  THEN BEGIN
+	str_method ='Bayesiano'
+	arr_sal = classify_bayesian(mat_training, mat_classify, arr_classtrain, WEIGTHS=arr_weights)
+ENDIF
+IF opt_knn  EQ 1   THEN BEGIN
+	str_method ='Knn'
+	arr_sal = classify_knn(mat_training, mat_classify, arr_classtrain, K=n_knn, N=2, $
+			MAHALANOBIS=opt_mahalanobis, EUCLIDEAN=opt_euclidean, WEIGTHS=arr_weights)
+ENDIF
+IF opt_linear EQ 1 THEN BEGIN
+	str_method = 'Discriminante_lineal'
+	arr_sal = classify_Lineardiscriminant(mat_classify, arr_discriminant, WEIGTHS=arr_weights)
+ENDIF
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+
+arr_1 = arr_classmeasure
+arr_2 = arr_sal
+
+;---------------------------------------------------------------------------------
+
+Aciertos_Negativos = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 0))
+Falsos_positivos   = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 1))
+Aciertos_Positivos = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 1))
+Falsos_Negativos   = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 0))
+
+Sensibilidad  = Aciertos_positivos/(Aciertos_positivos + Falsos_negativos)
+Especificidad = Aciertos_negativos/(Aciertos_negativos + falsos_positivos)
+
+
+Pos_fpos = WHERE((arr_1 EQ 0) AND (arr_2 EQ 1), ct_1)
+Pos_fneg = WHERE((arr_1 EQ 1) AND (arr_2 EQ 0), ct_2)
+
+IF ct_1 EQ 0 THEN arr_fpos = [0] ELSE $
+	arr_fpos = mat_indexes[*, Pos_fpos]
+
+IF ct_2 EQ 0 THEN arr_fneg = [0] ELSE $
+	arr_fneg = mat_indexes[*, Pos_fneg]
+
+;---------------------------------------------------------------------------------
+
+IF opt_detecterrors EQ 1 THEN BEGIN
+
+	str_var =''
+	FOR i=0L, falsos_positivos-1 DO BEGIN
+		culture  = arr_fpos[0,i]
+		culture = STRMID(culture, 1)
+		n_image  = FIX(arr_fpos[1,i])
+		n_object = FIX(arr_fpos[2,i])
+		im1 = view_bacile_disk(n_image, n_object, CULTURE=culture)
+		WAIT, 3
+		;READ, str_var, prompt='Pausa, presione una tecla'
+	ENDFOR
+ENDIF
+
+;------------------------------------------------------------------------------
+
+PRINT, ''
+PRINT, 'Objetos falsos negativos'
+PRINT, ''
+PRINT, arr_fneg
+PRINT, ''
+PRINT, 'Objetos falsos positivos'
+PRINT, ''
+PRINT, arr_fpos
+PRINT, ''
+
+PRINT, ''
+PRINT, 'Positivos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 1))
+PRINT, 'Negativos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 0))
+PRINT, 'Positivos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 1))
+PRINT, 'Negativos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 0))
+PRINT, ''
+
+PRINT, str_method
+PRINT, ''
+PRINT, 'Aciertos negativos :  ', Aciertos_Negativos
+PRINT, 'Falsos positivos   :  ', Falsos_positivos
+PRINT, 'Aciertos positivos :  ', Aciertos_Positivos
+PRINT, 'Falsos negativos   :  ', Falsos_Negativos
+PRINT, ''
+PRINT, 'Sensibilidad  :  ', sensibilidad
+PRINT, 'Especificidad :  ', especificidad
+PRINT, ''
+PRINT, strarr_paramnames
+PRINT, ''
+
+;------------------------------------------------------------------------------
+
+;fisher = data_lambdawilks(mat_training, arr_classtrain, /FISHER)
+;wilks  = data_lambdawilks(mat_training, arr_classtrain, /WILKS, /TRAC)
+;res = data_singlefeature(mat_training[0,*], arr_classtrain)
+
+
+
+END
+
+
+PRO fbat_classify_allmethods_2
+
+;fbat_classify_allmethods_2
+
+;------------------------------------------------------------------------------
+;
+; Función general de clasificación estadística para datos de entrada de parámetros
+; leidos de archivos de texto en el formato creado por "write_SPSS_archive_2.pro"
+; Y similares
+;
+; Lee archivos y en función de las keywords internas calcula varias clasificaciones:
+;  - Bayesiana clásica
+;  - Knn
+;  - Discriminante lineal (previamente calculado con SPSS)
+;
+; - También elige los parámetros que se van a utilizar
+;
+;------------------------------------------------------------------------------
+;-------------------------------------------------------
+; Las características que se corresponden a lass columnas,
+;en archivos tipo iSAM :
+;
+; momentos = 29:39
+; todos = 4:39
+;
+; 0 = 'culture'  - Identificador STRING de cultivo
+; 1 = 'n_image'  - Número de imagen
+; 2 = 'index'    - Número de región (bacilo o negativo)
+; 3 = 'class'    - Identificador de clase (0: negativo, no marcado, 1:positivo, marcado)
+; 4 = 'size'     - Tamaño (área)
+; 5 = 'perim'    - Perímetro
+; 6 = 'mean_r'   - Media del canal rojo
+; 7 = 'mean_g'   - Media del canal verde
+; 8 = 'mean_b'   - Media del canal azul
+; 9 = 'stdv_r'   - Desviación estándar del canal rojo
+;10 = 'stdv_g'   - Desviación estándar del canal verde
+;11 = 'stdv_b'   - Desviación estándar del canal azul
+;12 = 'origin_x' - Posición del bacilo en x
+;13 = 'origin_y' - Posición del bacilo en y
+;14 = 'cmass_x'  - Centro de masas de la máscara binaria, relativo en x
+;15 = 'cmass_y'  - Centro de masas de la máscara binaria, relativo en y
+;16 = 'gcmass_x' - Centro de masas del canal verde, relativo en x
+;17 = 'gcmass_y' - Centro de masas del canal verde, relativo en y
+;18 = 'longdim'  - Diatancia máxima entre píxeles de la región
+;19 = 'thinness' - Delgadez, mediante autovalores de la matriz de momentos (+delgado, -thinness)
+;20 = 'angle'    - Angulo, mediante matriz de momentos
+;21 = 'ffactor'  - Factor de forma:  (4.0*!PI*area)/(perimeter^2)
+;22 = 'feretd'   - Diámetro de Feret: SQRT((4.0*area)/!PI)
+;23 = 'compact'  - Compactación:  diámetro de feret/distancia máxima en la forma
+;24 = 'maxr'     - Distancia máxima de un punto al centro de masas
+;25 = 'minr'     - Distancia mínima de un punto al centro de masas
+;26 = 'maxdist'  - Distancia máxima de un píxel al fondo
+;27 = 'rectness' - Rectangularidad (relación entre el área y la de el rectángulo menor circunscrito)
+;28 = 'm11'      - Momentos (i,j) (en imagen de gris del canal verde)
+;29 = 'm20'
+;30 = 'm02'
+;31 = 'm21'
+;32 = 'm12'
+;33 = 'm30'
+;34 = 'm03'
+;35 = 'm22'
+;36 = 'm31'
+;37 = 'm13'
+;38 = 'm40'
+;39 = 'm04'
+;-------------------------------------------------------
+
+;------------------
+
+opt_bayes  = 0
+opt_knn    = 0
+opt_linear = 0
+opt_fknn   = 1
+
+val_fknn = 0.6
+
+n_knn = 9
+
+opt_changetrain  = 0
+opt_detecterrors = 0
+opt_normalize    = 1
+
+opt_mahalanobis = 0
+opt_euclidean   = 1
+
+opt_weights = 1
+
+opt_invariant = 1
+
+opt_mostdiscriminants = 1
+opt_pca = 1
+n_good = 20	; Los 20 más discriminantes
+n_pca  =  8 ; Análisis de componentes principales de 20
+
+;------------------
+
+str_disk1 = 'e:\'
+str_path1 = 'micro\results\files_tab_training\'
+str_file1 = 'Tabfile_training_iSAM_class01.txt'       ; Entrenamiento
+;str_file1 = 'Tabfile_training_iSAM_class01_norm.txt'  ; Entrenamiento
+
+str_disk2 = 'e:\'
+str_path2 = 'micro\results\files_tab_test\'
+str_file2 = 'Tabfile_test_iSAM_class01.txt'		    ; Test
+;str_file2 = 'Tabfile_test_iSAM_class01_norm.txt'   ; Entrenamiento
+
+path_file1 = str_disk1 + str_path1 + str_file1
+path_file2 = str_disk2 + str_path2 + str_file2
+
+
+; El conjunto de entrenamiento y el de test se pueden intercambiar,
+; menos en Discriminante lineal
+
+;--------------------------------------------------------
+str_names1   = read_spss_archive(path_file1, /NAMES)
+strmat_file1 = read_spss_archive(path_file1)
+
+;str_names2   = read_spss_archive(path_file2, /NAMES)
+strmat_file2 = read_spss_archive(path_file2)
+
+;str_names3   = read_spss_archive(path_file3, /NAMES)
+;strmat_file3 = read_spss_archive(path_file3)
+;--------------------------------------------------------
+
+tam1 = SIZE(strmat_file1)
+tam2 = SIZE(strmat_file2)
+n_samples1 = tam1[2] - 1
+n_samples2 = tam2[2] - 1
+strmat_file1 = strmat_file1[*,1:n_samples1]  ; Elimina los nombres
+strmat_file2 = strmat_file2[*,1:n_samples2]  ; Elimina los nombres
+
+;-------------------------------------------------------
+
+IF opt_linear EQ 1 THEN BEGIN
+	params_valid = [8,9,10,22,23,26,27,39]
+	;arr_discriminant =[0.0, 0.115, 0.352, 0.416, 0.458, -0.799, -0.209, 0.490, -0.264]
+	arr_discriminant = [-4.618, 0.005, 0.030, 0.045, 0.367, -7.752, -0.297, 9.079, 0.000]
+	opt_pca     = 0
+	opt_weights = 0
+	opt_mostdiscriminants = 0
+	opt_invariant = 0
+	opt_normalize = 0
+ENDIF ELSE BEGIN
+	params_valid = [4,5,6,7,8,9,10,11,14,15,16,17,18,19,21,22, $
+		23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]		;33 caracteristicas
+	;params_valid = [4,6,7,8,28,29,30,31,32,33,34,35,36,37,38]
+ENDELSE
+
+
+arr_classes1 = FIX(strmat_file1[3,*])
+mat_params1  = FLOAT(strmat_file1[params_valid,  *])
+mat_indexes1 = strmat_file1[0:2,  *]
+arr_classes2 = FIX(strmat_file2[3,*])
+mat_params2  = FLOAT(strmat_file2[params_valid,  *])
+mat_indexes2 = strmat_file2[0:2,  *]
+
+strarr_paramnames = str_names1[params_valid]
+
+;----------------------------
+PRINT, strarr_paramnames
+;----------------------------
+
+IF opt_changetrain EQ 0 THEN BEGIN
+	mat_training = mat_params1
+	mat_classify = mat_params2
+	mat_indexes  = mat_indexes2
+	arr_classtrain   = arr_classes1
+	arr_classmeasure = arr_classes2
+ENDIF ELSE BEGIN
+	mat_training = mat_params2
+	mat_classify = mat_params1
+	mat_indexes  = mat_indexes1
+	arr_classtrain   = arr_classes2
+	arr_classmeasure = arr_classes1
+ENDELSE
+
+
+n_param = (SIZE(mat_training))[1]
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+IF opt_invariant EQ 1 THEN BEGIN	;transforma los 6 primeros momentos en invariantes
+
+	pos_m11 = WHERE(strarr_paramnames EQ 'm11', ct)
+	IF ct EQ 0 THEN RETURN
+	pos_m11 = pos_m11[0]
+	mat_training_inv = data_invariantmoments(mat_training[pos_m11:pos_m11+6, *])
+	mat_classify_inv = data_invariantmoments(mat_classify[pos_m11:pos_m11+6, *])
+	mat_training = [mat_training, mat_training_inv]
+	mat_classify = [mat_classify, mat_classify_inv]
+	strarr_paramnames =[strarr_paramnames, 'inv1', 'inv2', 'inv3', 'inv4', 'inv5', 'inv6', 'inv7']
+
+ENDIF
+
+n_param = (SIZE(mat_training))[1]
+
+;-------------------------------------------------------
+
+IF opt_normalize EQ 1 THEN BEGIN
+	FOR i=0, n_param-1 DO BEGIN
+		mat_classify[i,*] = var_normalize_3(mat_classify[i,*])
+		mat_training[i,*] = var_normalize_3(mat_training[i,*])
+
+	ENDFOR
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; elección de los parámetros más discriminantes
+
+IF opt_mostdiscriminants THEN BEGIN
+	mat_classdis = DBLARR(n_param)
+	FOR i=0, n_param-1 DO BEGIN
+		mat_classdis[i] = data_singlefeature(mat_training[i,*], arr_classtrain)
+	ENDFOR
+	arr_sort = REVERSE(SORT(mat_classdis))
+	strarr_paramnames = strarr_paramnames[arr_sort[0:n_good-1]]
+	mat_classify = mat_classify[arr_sort[0:n_good-1],*]
+	mat_training = mat_training[arr_sort[0:n_good-1],*]
+
+	n_param = (SIZE(mat_training))[1]
+	;arr_weights = mat_classdis[arr_sort[0:n_good-1]]
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; Componentes principales
+
+IF opt_pca EQ 1 THEN BEGIN
+
+	mat_covar = CORRELATE(mat_training, /COVARIANCE, /DOUBLE)
+
+	mat_training = data_PCA(mat_training, mat_covar, N_DIM=n_pca)
+	mat_classify = data_PCA(mat_classify, mat_covar, N_DIM=n_pca)
+
+	n_param = (SIZE(mat_training))[1]
+
+	arr_weights = FLTARR(1, n_param) + 1.0
+
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+
+IF opt_weights EQ 1 THEN BEGIN
+	arr_weights = data_weights(mat_training, OPTION=1)
+ENDIF ELSE BEGIN
+	arr_weights = FLTARR(1, n_param) + 1.0
+ENDELSE
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+IF opt_bayes EQ 1  THEN BEGIN
+	str_method ='Bayesiano'
+	arr_sal = classify_bayesian(mat_training, mat_classify, arr_classtrain, WEIGTHS=arr_weights)
+ENDIF
+IF opt_knn  EQ 1   THEN BEGIN
+	str_method ='Knn'
+	arr_sal = classify_knn(mat_training, mat_classify, arr_classtrain, K=n_knn, N=2, $
+			MAHALANOBIS=opt_mahalanobis, EUCLIDEAN=opt_euclidean, WEIGTHS=arr_weights)
+ENDIF
+IF opt_fknn  EQ 1   THEN BEGIN
+	str_method ='Fuzzy Knn'
+	arr_sal = classify_fuzzyknn(mat_training, mat_classify, arr_classtrain, K=n_knn, N=2, $
+			THRESHOLD=val_fknn, M_MULT=2, WEIGTHS=arr_weights)
+ENDIF
+IF opt_linear EQ 1 THEN BEGIN
+	str_method = 'Discriminante_lineal'
+	arr_sal = classify_Lineardiscriminant(mat_classify, arr_discriminant, WEIGTHS=arr_weights)
+ENDIF
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+
+arr_1 = arr_classmeasure
+arr_2 = arr_sal
+
+;---------------------------------------------------------------------------------
+
+Aciertos_Negativos = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 0))
+Falsos_positivos   = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 1))
+Aciertos_Positivos = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 1))
+Falsos_Negativos   = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 0))
+
+Sensibilidad  = Aciertos_positivos/(Aciertos_positivos + Falsos_negativos)
+Especificidad = Aciertos_negativos/(Aciertos_negativos + falsos_positivos)
+
+
+Pos_fpos = WHERE((arr_1 EQ 0) AND (arr_2 EQ 1), ct_1)
+Pos_fneg = WHERE((arr_1 EQ 1) AND (arr_2 EQ 0), ct_2)
+
+IF ct_1 EQ 0 THEN arr_fpos = [0] ELSE $
+	arr_fpos = mat_indexes[*, Pos_fpos]
+
+IF ct_2 EQ 0 THEN arr_fneg = [0] ELSE $
+	arr_fneg = mat_indexes[*, Pos_fneg]
+
+;---------------------------------------------------------------------------------
+
+IF opt_detecterrors EQ 1 THEN BEGIN
+
+	str_var =''
+	FOR i=0L, falsos_positivos-1 DO BEGIN
+		culture  = arr_fpos[0,i]
+		culture = STRMID(culture, 1)
+		n_image  = FIX(arr_fpos[1,i])
+		n_object = FIX(arr_fpos[2,i])
+		im1 = view_bacile_disk(n_image, n_object, CULTURE=culture)
+		WAIT, 3
+		;READ, str_var, prompt='Pausa, presione una tecla'
+	ENDFOR
+ENDIF
+
+;------------------------------------------------------------------------------
+
+PRINT, ''
+PRINT, 'Objetos falsos negativos'
+PRINT, ''
+PRINT, arr_fneg
+PRINT, ''
+PRINT, 'Objetos falsos positivos'
+PRINT, ''
+PRINT, arr_fpos
+PRINT, ''
+
+PRINT, ''
+PRINT, 'Positivos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 1))
+PRINT, 'Negativos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 0))
+PRINT, 'Positivos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 1))
+PRINT, 'Negativos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 0))
+PRINT, ''
+
+PRINT, str_method
+PRINT, ''
+PRINT, 'Aciertos negativos :  ', Aciertos_Negativos
+PRINT, 'Falsos positivos   :  ', Falsos_positivos
+PRINT, 'Aciertos positivos :  ', Aciertos_Positivos
+PRINT, 'Falsos negativos   :  ', Falsos_Negativos
+PRINT, ''
+PRINT, 'Sensibilidad  :  ', sensibilidad
+PRINT, 'Especificidad :  ', especificidad
+PRINT, ''
+PRINT, strarr_paramnames
+PRINT, ''
+
+;------------------------------------------------------------------------------
+
+;fisher = data_lambdawilks(mat_training, arr_classtrain, /FISHER)
+;wilks  = data_lambdawilks(mat_training, arr_classtrain, /WILKS, /TRAC)
+;res = data_singlefeature(mat_training[0,*], arr_classtrain)
+
+
+
+END
+
+
+PRO fbat_classify_allmethods_loo
+
+;fbat_classify_allmethods_loo
+
+;------------------------------------------------------------------------------
+;
+; Función general de clasificación estadística para datos de entrada de parámetros
+; leidos de archivos de texto en el formato creado por "write_SPSS_archive_2.pro"
+; Y similares
+;
+; Lee archivos y en función de las keywords internas calcula varias clasificaciones:
+;  - Bayesiana clásica
+;  - Knn
+;  - Discriminante lineal (previamente calculado con SPSS)
+;
+;  - También elige los parámetros que se van a utilizar
+;
+;  - Realiza un LEFT-ONE-OUT rotando el 25% de los datos
+;
+;------------------------------------------------------------------------------
+;-------------------------------------------------------
+; Las características que se corresponden a lass columnas,
+;en archivos tipo iSAM :
+;
+; momentos = 29:39
+; todos = 4:39
+;
+; 0 = 'culture'  - Identificador STRING de cultivo
+; 1 = 'n_image'  - Número de imagen
+; 2 = 'index'    - Número de región (bacilo o negativo)
+; 3 = 'class'    - Identificador de clase (0: negativo, no marcado, 1:positivo, marcado)
+; 4 = 'size'     - Tamaño (área)
+; 5 = 'perim'    - Perímetro
+; 6 = 'mean_r'   - Media del canal rojo
+; 7 = 'mean_g'   - Media del canal verde
+; 8 = 'mean_b'   - Media del canal azul
+; 9 = 'stdv_r'   - Desviación estándar del canal rojo
+;10 = 'stdv_g'   - Desviación estándar del canal verde
+;11 = 'stdv_b'   - Desviación estándar del canal azul
+;12 = 'origin_x' - Posición del bacilo en x
+;13 = 'origin_y' - Posición del bacilo en y
+;14 = 'cmass_x'  - Centro de masas de la máscara binaria, relativo en x
+;15 = 'cmass_y'  - Centro de masas de la máscara binaria, relativo en y
+;16 = 'gcmass_x' - Centro de masas del canal verde, relativo en x
+;17 = 'gcmass_y' - Centro de masas del canal verde, relativo en y
+;18 = 'longdim'  - Diatancia máxima entre píxeles de la región
+;19 = 'thinness' - Delgadez, mediante autovalores de la matriz de momentos (+delgado, -thinness)
+;20 = 'angle'    - Angulo, mediante matriz de momentos
+;21 = 'ffactor'  - Factor de forma:  (4.0*!PI*area)/(perimeter^2)
+;22 = 'feretd'   - Diámetro de Feret: SQRT((4.0*area)/!PI)
+;23 = 'compact'  - Compactación:  diámetro de feret/distancia máxima en la forma
+;24 = 'maxr'     - Distancia máxima de un punto al centro de masas
+;25 = 'minr'     - Distancia mínima de un punto al centro de masas
+;26 = 'maxdist'  - Distancia máxima de un píxel al fondo
+;27 = 'rectness' - Rectangularidad (relación entre el área y la de el rectángulo menor circunscrito)
+;28 = 'm11'      - Momentos (i,j) (en imagen de gris del canal verde)
+;29 = 'm20'
+;30 = 'm02'
+;31 = 'm21'
+;32 = 'm12'
+;33 = 'm30'
+;34 = 'm03'
+;35 = 'm22'
+;36 = 'm31'
+;37 = 'm13'
+;38 = 'm40'
+;39 = 'm04'
+;-------------------------------------------------------
+
+;------------------
+
+opt_bayes  = 0
+opt_knn    = 1
+opt_linear = 0
+opt_fknn   = 0
+
+opt_equal_n = 0
+
+val_fknn = 0.75
+
+n_knn = 9
+
+opt_detecterrors = 0
+opt_normalize    = 1
+
+opt_mahalanobis = 0
+opt_euclidean   = 1
+
+opt_weights = 1
+
+opt_invariant = 0
+
+opt_mostdiscriminants = 1
+opt_pca = 1
+n_good = 20	; Los 20 más discriminantes
+ n_pca  = 8 ; Análisis de componentes principales de 20
+
+loo_buc = 4 ; 25% de test y cuatro repeticiones en el LOO
+
+;------------------
+
+sensibilidad  = FLTARR(loo_buc)
+especificidad = FLTARR(loo_buc)
+
+str_disk1 = 'e:\'
+str_path1 = 'micro\results\files_tab_training\'
+str_file1 = 'Tabfile_training_iSAM_class01.txt'       ; Entrenamiento
+;str_file1 = 'Tabfile_training_iSAM_class01_norm.txt'  ; Entrenamiento
+
+str_disk2 = 'e:\'
+str_path2 = 'micro\results\files_tab_test\'
+str_file2 = 'Tabfile_test_iSAM_class01.txt'		    ; Test
+;str_file2 = 'Tabfile_test_iSAM_class01_norm.txt'   ; Entrenamiento
+
+path_file1 = str_disk1 + str_path1 + str_file1
+path_file2 = str_disk2 + str_path2 + str_file2
+
+
+; El conjunto de entrenamiento y el de test se pueden intercambiar,
+; menos en Discriminante lineal
+
+;--------------------------------------------------------
+str_names1   = read_spss_archive(path_file1, /NAMES)
+strmat_file1 = read_spss_archive(path_file1)
+
+;str_names2   = read_spss_archive(path_file2, /NAMES)
+strmat_file2 = read_spss_archive(path_file2)
+
+;str_names3   = read_spss_archive(path_file3, /NAMES)
+;strmat_file3 = read_spss_archive(path_file3)
+;--------------------------------------------------------
+
+tam1 = SIZE(strmat_file1)
+tam2 = SIZE(strmat_file2)
+n_samples1 = tam1[2] - 1
+n_samples2 = tam2[2] - 1
+strmat_file1 = strmat_file1[*,1:n_samples1]  ; Elimina los nombres
+strmat_file2 = strmat_file2[*,1:n_samples2]  ; Elimina los nombres
+
+;-------------------------------------------------------
+
+IF opt_linear EQ 1 THEN BEGIN
+	params_valid = [8,9,10,22,23,26,27,39]
+	;arr_discriminant =[0.0, 0.115, 0.352, 0.416, 0.458, -0.799, -0.209, 0.490, -0.264]
+	arr_discriminant = [-4.618, 0.005, 0.030, 0.045, 0.367, -7.752, -0.297, 9.079, 0.000]
+	opt_pca     = 0
+	opt_weights = 0
+	opt_mostdiscriminants = 0
+	opt_invariant = 0
+	opt_normalize = 0
+ENDIF ELSE BEGIN
+	params_valid = [4,5,6,7,8,9,10,11,14,15,16,17,18,19,21,22, $
+		23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]		;33 caracteristicas
+	;params_valid = [4,6,7,8,28,29,30,31,32,33,34,35,36,37,38]
+	;params_valid = [8,9,10,22,23,26,27,39] ; los de SPSS
+	;mean_b stdv_r, stdv_g, feretd, compact, maxdist, rectness, m04]
+ENDELSE
+
+
+arr_classes1 = FIX(strmat_file1[3,*])
+mat_params1  = FLOAT(strmat_file1[params_valid,  *])
+mat_indexes1 = strmat_file1[0:2,  *]
+arr_classes2 = FIX(strmat_file2[3,*])
+mat_params2  = FLOAT(strmat_file2[params_valid,  *])
+mat_indexes2 = strmat_file2[0:2,  *]
+
+strarr_paramnames = str_names1[params_valid]
+
+;----------------------------
+PRINT, strarr_paramnames
+;----------------------------
+
+;-------------------------------------------------------
+;-------------------------------------------------------
+arr_classes = [[arr_classes1], [arr_classes2]]
+mat_params  = [[mat_params1],  [mat_params2]]
+mat_indexes = [[mat_indexes1], [mat_indexes2]]
+
+pos_class1 = WHERE(arr_classes EQ 0)
+pos_class2 = WHERE(arr_classes EQ 1)
+
+n_class1 = N_ELEMENTS(pos_class1)
+n_class2 = N_ELEMENTS(pos_class2)
+
+n_loo_c1 = n_class1/loo_buc ;n_loo_c2 = n_class1/loo_buc
+n_loo_c2 = n_class2/loo_buc;
+
+;-------------------------------------------------------
+;-------------------------------------------------------
+;LOO
+
+FOR k=0L, loo_buc-1 DO BEGIN
+
+	pos_classify_c1 = INDGEN(n_loo_c1)+(k*n_loo_c1)
+	pos_classify_c2 = INDGEN(n_loo_c2)+(k*n_loo_c2)
+
+	pos_training_c1 = INDGEN(n_class1)
+	pos_1 = WHERE(pos_training_c1 LT pos_classify_c1[0], ct1)
+	pos_2 = WHERE(pos_training_c1 GT pos_classify_c1[n_loo_c1-1], ct2)
+	IF (ct1 GT 0) AND (ct2 GT 0) THEN $
+		pos_training_c1 = [pos_training_c1[pos_1], pos_training_c1[pos_2]]
+	IF (ct1 EQ 0) THEN $
+		pos_training_c1 = pos_training_c1[pos_2]
+	IF (ct2 EQ 0) THEN $
+		pos_training_c1 = pos_training_c1[pos_1]
+
+	pos_training_c2 = INDGEN(n_class2)
+	pos_1 = WHERE(pos_training_c2 LT pos_classify_c2[0], ct1)
+	pos_2 = WHERE(pos_training_c2 GT pos_classify_c2[n_loo_c2-1], ct2)
+	IF (ct1 GT 0) AND (ct2 GT 0) THEN $
+		pos_training_c2 = [pos_training_c2[pos_1], pos_training_c2[pos_2]]
+	IF (ct1 EQ 0) THEN $
+		pos_training_c2 = pos_training_c2[pos_2]
+	IF (ct2 EQ 0) THEN $
+		pos_training_c2 = pos_training_c2[pos_1]
+
+	;--------------------------------------------------------
+	IF opt_equal_n THEN BEGIN
+		n_c2 = N_ELEMENTS(pos_training_c2)
+		n_c1 = N_ELEMENTS(pos_training_c1)
+
+		IF n_c2 LT n_c1 THEN BEGIN
+			pos_training_c1 = pos_training_c1[0:n_c2-1]
+		ENDIF ELSE BEGIN
+			pos_training_c2 = pos_training_c2[0:n_c1-1]
+		ENDELSE
+	ENDIF
+	;--------------------------------------------------------
+
+	mat_training_c1 = mat_params[*, pos_class1[pos_training_c1]]
+	mat_training_c2 = mat_params[*, pos_class2[pos_training_c2]]
+
+	mat_training = [[mat_training_c1], [mat_training_c2]]
+
+	mat_classify_c1 = mat_params[*, pos_class1[pos_classify_c1]]
+	mat_classify_c2 = mat_params[*, pos_class2[pos_classify_c2]]
+
+	mat_classify = [[mat_classify_c1], [mat_classify_c2]]
+
+	arr_classtrain_c1   = arr_classes[pos_class1[pos_training_c1]]
+	arr_classtrain_c2   = arr_classes[pos_class2[pos_training_c2]]
+
+	arr_classtrain = [arr_classtrain_c1, arr_classtrain_c2]
+
+	arr_classmeasure_c1 = arr_classes[pos_class1[pos_classify_c1]]
+	arr_classmeasure_c2 = arr_classes[pos_class2[pos_classify_c2]]
+
+	arr_classmeasure = [arr_classmeasure_c1,arr_classmeasure_c2]
+
+
+	n_param = (SIZE(mat_training))[1]
+
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+	IF opt_invariant EQ 1 THEN BEGIN	;transforma los 6 primeros momentos en invariantes
+
+		pos_m11 = WHERE(strarr_paramnames EQ 'm11', ct)
+		IF ct EQ 0 THEN RETURN
+		pos_m11 = pos_m11[0]
+		mat_training_inv = data_invariantmoments(mat_training[pos_m11:pos_m11+6, *])
+		mat_classify_inv = data_invariantmoments(mat_classify[pos_m11:pos_m11+6, *])
+		mat_training = [mat_training, mat_training_inv]
+		mat_classify = [mat_classify, mat_classify_inv]
+		strarr_paramnames =[strarr_paramnames, 'inv1', 'inv2', 'inv3', 'inv4', 'inv5', 'inv6', 'inv7']
+
+	ENDIF
+
+	n_param = (SIZE(mat_training))[1]
+
+	;-------------------------------------------------------
+
+	IF opt_normalize EQ 1 THEN BEGIN
+		FOR i=0, n_param-1 DO BEGIN
+			mat_classify[i,*] = var_normalize_3(mat_classify[i,*])
+			mat_training[i,*] = var_normalize_3(mat_training[i,*])
+
+		ENDFOR
+	ENDIF
+
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+	; elección de los parámetros más discriminantes
+
+	strarr_paramnames_good = strarr_paramnames
+
+	IF opt_mostdiscriminants THEN BEGIN
+		mat_classdis = DBLARR(n_param)
+		FOR i=0, n_param-1 DO BEGIN
+			mat_classdis[i] = data_singlefeature(mat_training[i,*], arr_classtrain)
+		ENDFOR
+		arr_sort = REVERSE(SORT(mat_classdis))
+		strarr_paramnames_good = strarr_paramnames[arr_sort[0:n_good-1]]
+		mat_classify = mat_classify[arr_sort[0:n_good-1],*]
+		mat_training = mat_training[arr_sort[0:n_good-1],*]
+
+		n_param = (SIZE(mat_training))[1]
+		;arr_weights = mat_classdis[arr_sort[0:n_good-1]]
+	ENDIF
+
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+	; Componentes principales
+
+	IF opt_pca EQ 1 THEN BEGIN
+
+		mat_covar = CORRELATE(mat_training, /COVARIANCE, /DOUBLE)
+
+		mat_training = data_PCA(mat_training, mat_covar, N_DIM=n_pca)
+		mat_classify = data_PCA(mat_classify, mat_covar, N_DIM=n_pca)
+
+		n_param = (SIZE(mat_training))[1]
+
+		arr_weights = FLTARR(1, n_param) + 1.0
+
+	ENDIF
+
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+
+	IF opt_weights EQ 1 THEN BEGIN
+		arr_weights = data_weights(mat_training, OPTION=1)
+	ENDIF ELSE BEGIN
+		arr_weights = FLTARR(1, n_param) + 1.0
+	ENDELSE
+
+	PRINT, arr_weights
+
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+	IF opt_bayes EQ 1  THEN BEGIN
+		str_method ='Bayesiano'
+		arr_sal = classify_bayesian(mat_training, mat_classify, arr_classtrain, WEIGTHS=arr_weights)
+	ENDIF
+	IF opt_knn  EQ 1   THEN BEGIN
+		str_method ='Knn'
+		arr_sal = classify_knn(mat_training, mat_classify, arr_classtrain, K=n_knn, N=2, $
+				MAHALANOBIS=opt_mahalanobis, EUCLIDEAN=opt_euclidean, WEIGTHS=arr_weights)
+	ENDIF
+	IF opt_fknn  EQ 1   THEN BEGIN
+		str_method ='Fuzzy Knn'
+		arr_sal = classify_fuzzyknn(mat_training, mat_classify, arr_classtrain, K=n_knn, N=2, $
+				THRESHOLD=val_fknn, M_MULT=2, WEIGTHS=arr_weights)
+	ENDIF
+	IF opt_linear EQ 1 THEN BEGIN
+		str_method = 'Discriminante_lineal'
+		arr_sal = classify_Lineardiscriminant(mat_classify, arr_discriminant, WEIGTHS=arr_weights)
+	ENDIF
+	;------------------------------------------------------------------------------
+	;------------------------------------------------------------------------------
+
+	arr_1 = arr_classmeasure
+	arr_2 = arr_sal
+
+	;---------------------------------------------------------------------------------
+
+	Aciertos_Negativos = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 0))
+	Falsos_positivos   = TOTAL((arr_1 EQ 0) AND (arr_2 EQ 1))
+	Aciertos_Positivos = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 1))
+	Falsos_Negativos   = TOTAL((arr_1 EQ 1) AND (arr_2 EQ 0))
+
+	Sensibilidad[k]  = Aciertos_positivos/(Aciertos_positivos + Falsos_negativos)
+	Especificidad[k] = Aciertos_negativos/(Aciertos_negativos + falsos_positivos)
+
+
+	Pos_fpos = WHERE((arr_1 EQ 0) AND (arr_2 EQ 1), ct_1)
+	Pos_fneg = WHERE((arr_1 EQ 1) AND (arr_2 EQ 0), ct_2)
+
+	IF ct_1 EQ 0 THEN arr_fpos = [0] ELSE $
+		arr_fpos = mat_indexes[*, Pos_fpos]
+
+	IF ct_2 EQ 0 THEN arr_fneg = [0] ELSE $
+		arr_fneg = mat_indexes[*, Pos_fneg]
+
+	;---------------------------------------------------------------------------------
+
+	IF opt_detecterrors EQ 1 THEN BEGIN
+
+		str_var =''
+		FOR i=0L, falsos_positivos-1 DO BEGIN
+			culture  = arr_fpos[0,i]
+			culture = STRMID(culture, 1)
+			n_image  = FIX(arr_fpos[1,i])
+			n_object = FIX(arr_fpos[2,i])
+			im1 = view_bacile_disk(n_image, n_object, CULTURE=culture)
+			WAIT, 3
+			;READ, str_var, prompt='Pausa, presione una tecla'
+		ENDFOR
+	ENDIF
+
+	;------------------------------------------------------------------------------
+
+	;PRINT, ''
+	;PRINT, 'Objetos falsos negativos'
+	;PRINT, ''
+	;PRINT, arr_fneg
+	;PRINT, ''
+	;PRINT, 'Objetos falsos positivos'
+	;PRINT, ''
+	;PRINT, arr_fpos
+	;PRINT, ''
+
+	PRINT, ''
+	PRINT, 'Positivos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 1))
+	PRINT, 'Negativos de entrenamiento: ', N_ELEMENTS(WHERE(arr_classtrain   EQ 0))
+	PRINT, 'Positivos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 1))
+	PRINT, 'Negativos de Test         : ', N_ELEMENTS(WHERE(arr_classmeasure EQ 0))
+	PRINT, ''
+
+	PRINT, str_method
+	PRINT, ''
+	PRINT, 'Aciertos negativos :  ', Aciertos_Negativos
+	PRINT, 'Falsos positivos   :  ', Falsos_positivos
+	PRINT, 'Aciertos positivos :  ', Aciertos_Positivos
+	PRINT, 'Falsos negativos   :  ', Falsos_Negativos
+	PRINT, ''
+	PRINT, 'Sensibilidad  :  ', sensibilidad[k]
+	PRINT, 'Especificidad :  ', especificidad[k]
+	PRINT, ''
+	PRINT, strarr_paramnames_good
+	PRINT, ''
+
+	;------------------------------------------------------------------------------
+
+	;fisher = data_lambdawilks(mat_training, arr_classtrain, /FISHER)
+	;wilks  = data_lambdawilks(mat_training, arr_classtrain, /WILKS, /TRAC)
+	;res = data_singlefeature(mat_training[0,*], arr_classtrain)
+
+ENDFOR
+
+sensibilidad_t  = MEAN(sensibilidad)
+especificidad_t = MEAN(especificidad)
+
+PRINT, ''
+PRINT, ''
+PRINT, 'Sensibilidad media  :  ', sensibilidad_t
+PRINT, 'Especificidad media :  ', especificidad_t
+PRINT, ''
+
+
+
+END
+
+;Get_GaussianMultivariate.pro
+
+; Calcula los paráametros de una función gaussiana multivariada a partir
+; de las muestras de entrada
+;
+; mat_data, matriz de n_samples (filas) por n_params (columnas), es decir
+; tantos parámetros por muestra como columnas
+;
+; La salida es una matriz de dimensiones [n_params*n_params+1]
+; donde la primera fila es el vector de medias, y la matriz cuadrada
+; restante es la matriz de covarianza
+;--------------------------------------------------------------------
+
+FUNCTION Get_GaussianMultivariate , mat_data
+
+
+tam = SIZE(mat_data)
+
+n_samples  = tam[2]
+n_param    = tam[1]
+
+;--------------------------------------------------------------------
+
+arr_means  = FLTARR(n_param, 1)
+mat_covars = FLTARR(n_param, n_param)
+
+FOR i=0L, n_param-1 DO BEGIN
+	arr_means[i] = MEAN(mat_data[i,*])
+ENDFOR
+
+mat_covars = CORRELATE(mat_data, /COVARIANCE)*n_samples/(n_samples+1)
+
+;FOR i=0L, n_param-1 DO BEGIN
+;	FOR j=0L, n_param-1 DO BEGIN
+;		mat_covars[i,j] = (1.0/n_samples)*TOTAL((mat_data[i,*]-arr_means[i])*(mat_data[j,*]-arr_means[j]))
+;	ENDFOR
+;ENDFOR
+
+RETURN, [[arr_means], [mat_covars]]
+
+END
+;Value_GaussianMultivariate.pro
+
+;--------------------------------------------------------------------
+;
+; Calcula el valor de una función gausiana multidimensional para un vector dado
+;
+; arr_data  - Vector de datos a evaluar
+; arr_mean  - Vector de medias de la función gausiana
+; mat_covar - Matriz de covarianzas de la función gausiana
+;
+; Con opción LOG, calcula el logaritmo de la función (log probabilidad)
+;
+;--------------------------------------------------------------------
+
+FUNCTION Value_GaussianMultivariate,  arr_data, arr_mean, mat_covar, LOG=log
+
+
+IF KEYWORD_SET(log) THEN opt_log = 1 ELSE opt_log = 0
+n_param = N_ELEMENTS(arr_data)
+n_1 = N_ELEMENTS(arr_mean)
+tam = SIZE(mat_covar)
+
+IF n_param NE n_1    THEN BEGIN & PRINT, 'Datos incorrectos de entrada' & RETURN, 1 & ENDIF
+IF n_param GT 1 THEN BEGIN
+	IF n_param NE tam[1] THEN BEGIN & PRINT, 'Datos incorrectos de entrada' & RETURN, 1 & ENDIF
+	IF n_param NE tam[2] THEN BEGIN & PRINT, 'Datos incorrectos de entrada' & RETURN, 1 & ENDIF
+ENDIF
+
+vect_1  = arr_data-arr_mean
+mat_inv = INVERT(mat_covar, status)
+IF status EQ 1 THEN BEGIN
+	PRINT, 'Inversion imposible'
+	RETURN, -1
+ENDIF
+
+exponent = vect_1##mat_inv##REFORM(vect_1, 1, n_param)
+
+IF n_param GT 1 THEN BEGIN
+	determ_cov = DETERM(mat_covar, /CHECK, /DOUBLE)
+ENDIF ELSE BEGIN
+	determ_cov = mat_covar
+ENDELSE
+
+IF opt_log EQ 1 THEN BEGIN
+	;prob_log = -0.5*ALOG(2.0*!PI*SQRT(determ_cov)) -0.5*exponent
+	prob_log = -exponent
+	RETURN, prob_log
+ENDIF ELSE BEGIN
+	prob     = (1.0/(SQRT(2.0*!PI*determ_cov)))*EXP(-0.5*exponent)
+	;PRINT, prob
+	RETURN, prob
+ENDELSE
+
+
+; queda por hacer
+
+RETURN, -1
+
+END

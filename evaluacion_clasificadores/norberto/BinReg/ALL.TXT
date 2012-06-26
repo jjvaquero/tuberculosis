@@ -1,0 +1,1297 @@
+
+FUNCTION binreg_Alldist, image_o, centermass, front_point
+
+; Calcula la distancia entre un eje definido por dos puntos y la región binaria
+; Se corresponde con la función "all_dist" de [Parker]
+;
+; Los dos puntos están dados en formato x-y
+; si coinciden, la distancia dada será 1
+;
+;
+;--------------------------------------------------------------------------------------
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+
+c_x = FLOAT(centermass[0])
+c_y = FLOAT(centermass[1])
+p_x = FLOAT(front_point[0])
+p_y = FLOAT(front_point[1])
+
+;------------------------------------------------------------
+
+IF (c_x EQ p_x) AND (c_y EQ p_y) THEN RETURN, -1
+
+;------------------------------------------------------------
+; Equation of the line is a*x + b*y +c = 0
+
+a = p_y - c_y
+b = c_x - p_x
+c = (-(c_x - p_x)*c_y) + ((c_y - p_y)*c_x)
+e = a*a + b*b
+dist = 0.0
+
+;------------------------------------------------------------
+
+arr_imag = WHERE(image_o EQ 1)
+IF arr_imag[0] EQ -1 THEN RETURN, -1
+
+n_pixels = FLOAT(N_ELEMENTS(arr_imag))
+
+arr_y = FLOAT((arr_imag / xsize)   )	; El menor es 1, no cero
+arr_x = FLOAT((arr_imag MOD xsize) )
+
+
+FOR i=0L, n_pixels -1 DO BEGIN
+	f = a*arr_x[i] + b*arr_y[i] + c
+	f = f*f/e
+	dist = dist + SQRT(f)
+ENDFOR
+
+;------------------------------------------------------------
+
+RETURN, dist
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_Angle, image_o
+
+; Obtiene el parámetro de ángulo mediante cálculo de momentos de una región binaria
+; Valor en radianes
+; Definción según [Jain96]
+;
+;
+;
+;--------------------------------------------------------------------------------------
+
+m_11 = binreg_moments(image_o, NI=1, NJ=1)
+m_20 = binreg_moments(image_o, NI=2, NJ=0)
+m_02 = binreg_moments(image_o, NI=0, NJ=2)
+
+;------------------------------------------------------------
+
+IF m_20 EQ m_02 THEN RETURN, 0.0 ; Figura simétrica
+
+angle = 0.5*ATAN(2*m_11/(m_20-m_02))
+
+RETURN, angle
+
+END
+
+
+;------------------------------------------------------------
+FUNCTION binreg_CenterMass, image_o, image_gray, OPTION=option, FLOATING=floating
+
+; Obtiene las coordenadas (x,y) del centro de masas o gravedad de una imagen binaria
+; (1 - Objeto, 0 - fondo)
+;
+; Si se añade una segunda imagen, entonces se calcula el centro de masas de imagen de gris
+; Se redondea al entero más próximo, salvo con la opción FLOAT
+;
+;--------------------------------------------------------------------------------------
+
+IF KEYWORD_SET(floating) THEN opt_float = 1 ELSE opt_float = 0
+IF N_PARAMS() EQ 2 THEN opt_gray = 1 ELSE opt_gray = 0
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+
+arr_imag = WHERE(image_o EQ 1)
+IF arr_imag[0] EQ -1 THEN RETURN, 0
+
+n_pixels = FLOAT(N_ELEMENTS(arr_imag))
+
+arr_y = FLOAT((arr_imag / xsize)   + 1)	; El menor es 1, no cero
+arr_x = FLOAT((arr_imag MOD xsize) + 1)
+
+;------------------------------------------------------------
+
+IF opt_gray EQ 0 THEN BEGIN
+	c_x = TOTAL(arr_x)/n_pixels
+	c_y = TOTAL(arr_y)/n_pixels
+ENDIF
+
+IF opt_gray EQ 1 THEN BEGIN ; Centro de masas de imagen de gris
+
+	arr_val = FIX(image_gray[arr_imag]) + 1
+
+	c_x = TOTAL(arr_x*arr_val)/TOTAL(arr_val)
+	c_y = TOTAL(arr_y*arr_val)/TOTAL(arr_val)
+ENDIF
+
+
+IF opt_float EQ 0 THEN BEGIN
+	c_x = FIX(ROUND(c_x)) - 1	; Se resta el punto de antes, para indexar a cero
+	c_y = FIX(ROUND(c_y)) - 1
+ENDIF
+IF opt_float EQ 1 THEN BEGIN
+	c_x = c_x - 1
+	c_y = c_y - 1
+ENDIF
+
+;------------------------------------------------------------
+
+RETURN, [c_x, c_y]
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_Colorisolate, arr_orig, imag_orig, XSIZE=xsize, YSIZE=ysize
+
+; Esta función tiene el objetivo de separar la parte de la imagen que contenga
+; una región binaria dada. Pero en la imagen de color asociada
+;
+; La entrada son los indices de los puntos, en valor x,y absolutos con los
+; parámetros XSIZE e YSIZE. Además de la imagen de color asociada (tres canales)
+; Detecta automáticamente si está en TRUE=1, o TRUE=3
+;
+;
+; im_sal = binreg_colorisolate(arr_orig, imag_orig, XSIZE=xsize, YSIZE=ysize)
+;--------------------------------------------------------------------------------------
+
+IF NOT KEYWORD_SET(image) THEN opt_imag = 0 ELSE opt_imag = 1
+
+
+IF N_ELEMENTS(xsize) AND N_ELEMENTS(ysize) THEN BEGIN
+
+	tam_col = SIZE(imag_orig)
+
+	IF tam_col[1] EQ 3 THEN opt_true = 1
+	IF tam_col[3] EQ 3 THEN opt_true = 3
+
+	arr_x = LONG(arr_orig) MOD xsize
+	arr_y = LONG(arr_orig) / xsize
+
+	min_x = MIN(arr_x)
+	max_x = MAX(arr_x)
+	min_y = MIN(arr_y)
+	max_y = MAX(arr_y)
+
+	tam_x = max_x - min_x + 1
+	tam_y = max_y - min_y + 1
+
+	arr_x = arr_x - min_x
+	arr_y = arr_y - min_y
+
+	;arr_sal = arr_x + (tam_x*arr_y)
+
+	IF opt_true EQ 1 THEN imag_sal = imag_orig[*, min_x:max_x, min_y:max_y]
+	IF opt_true EQ 2 THEN imag_sal = imag_orig[min_x:max_x, *, min_y:max_y]
+	IF opt_true EQ 3 THEN imag_sal = imag_orig[min_x:max_x, min_y:max_y, *]
+
+	RETURN, imag_sal
+
+ENDIF
+
+
+RETURN, -1
+
+END
+FUNCTION binreg_Compactness, image_o
+
+; Obtiene el parámetro de "compactness" o compactación de una imagen binaria
+; La fórmula aceptada es C = (sqrt(4*area/pi))/eje mayor (feretd/ejemayor)
+;
+;
+;--------------------------------------------------------------------------------------
+
+area = TOTAL(image_o)
+
+feretd =  SQRT((4.0*FLOAT(area))/!PI)
+mayoraxis = binreg_longestdimension(image_o)
+
+Cc = feretd/FLOAT(mayoraxis)
+
+IF Cc GT 1.0 THEN BEGIN
+	PRINT, 'Breakpoint'
+ENDIF
+
+RETURN, Cc
+
+END
+
+
+;------------------------------------------------------------
+FUNCTION binreg_Distance, image_o
+
+; Calcula la imagen de distancia morfológica (MORPH_DISTANCE) con
+; distancia euclídea a los valores de cero, pero sin efecto de bordes
+; (a menos que no haya ninguún cero)
+;
+; Si toda la imagen está a uno, creo un cero en [0,0]
+;
+; Aquí la entrada es una imagen binaria (habrá que separar)
+;
+;
+;------------------------------------------------------------
+
+
+tam = SIZE(image_o)
+
+CASE (SIZE(image_o))[0] OF; Las dimensiones de la imagen original
+
+    0: BEGIN    ; Un punto
+        xsize = FIX(1)
+        ysize = FIX(1)
+    END
+
+    1: BEGIN    ; Una fila
+        xsize = (SIZE(image_o))[1]
+        ysize = FIX(1)
+    END
+
+    2: BEGIN    ; Una Matriz
+         xsize = (SIZE(image_o))[1]
+         ysize = (SIZE(image_o))[2]
+    END
+
+ENDCASE
+
+imag = image_o
+
+IF MIN(imag) GT 0 THEN imag[0]=0
+
+;--------------------------------------------
+maxi = MAX([xsize, ysize])
+
+;--------------------------------------------
+xsize2 = (xsize*3)
+ysize2 = (ysize*3)
+maxi3  = (maxi*3)
+
+xbegin = maxi
+xend   = xbegin + xsize - 1
+
+ybegin = maxi ;ysize
+yend   = ybegin + ysize - 1
+
+im  = INTARR(maxi3+2, maxi3+2)+1
+
+im[xbegin+1 : xend+1, ybegin+1:yend+1] = imag
+;--------------------------------------------
+
+
+imag_dist = MORPH_DISTANCE(im, NEIGHBOR_SAMPLING=3)
+
+imag_d = imag_dist[xbegin+1 : xend+1, ybegin+1:yend+1]
+
+;--------------------------------------------
+
+RETURN, imag_d
+
+END
+FUNCTION binreg_FeretDiameter, image_o
+
+; Obtiene el parámetro del diámetro de Feret de una región binaria
+; La fórmula aceptada es Fd = sqrt(4*area/pi)
+;
+; El diametro del circulo con igual area que la region
+;
+;
+;
+;--------------------------------------------------------------------------------------
+
+
+area = N_ELEMENTS(WHERE(image_o EQ 1))
+
+feretd =  SQRT((4.0*FLOAT(area))/!PI)
+
+RETURN, feretd
+
+END
+
+
+;------------------------------------------------------------
+FUNCTION binreg_FormFactor, image_o
+
+; Obtiene el parámetro del factor de forma (o "circleness" ) de una región binaria
+; La fórmula aceptada es Ff = 4*Pi*Area/(perimetro^2)
+; Definción según [Jain96]
+;
+;
+;
+;--------------------------------------------------------------------------------------
+
+
+area = TOTAL(image_o)
+perimeter = binreg_perimeter(image_o)
+
+ffactor = (4.0*!PI*FLOAT(area))/(perimeter^2)
+
+IF ffactor GT 1.0 THEN BEGIN
+	PRINT, 'Breakpoint'
+ENDIF
+
+RETURN, ffactor
+
+END
+
+
+;------------------------------------------------------------
+FUNCTION binreg_FourierDescriptors, image_o, number
+
+; Obtiene N descriptores de Fourier de una forma (shape) binaria
+; Retorna un array con 2*N descriptores de fourier
+;
+; Ojito con el recorrido de píxeles de la forma
+;
+;--------------------------------------------------------------------------------------
+
+IF N_PARAMS() NE 2 THEN number = 8 ; Por defecto, los descriptores son 8
+
+;--------------------------------------------------------------------------------------
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+imag_perim    = binreg_frontier(image_o)
+
+arr_pos = binreg_orderperimeter(image_o)
+
+arr_fdest = FLTARR(2*number)
+
+n_pixels = (SIZE(arr_pos))[2]
+
+;------------------------------------------------------------
+
+segm = FLOAT(n_pixels)/number
+arr_segm = FLOAT(INDGEN(number))
+
+;arr_dist = FIX(ROUND(arr_segm*segm))
+arr_dist = FIX(arr_segm*segm)
+IF arr_dist[number-1] GE n_pixels THEN arr_dist[number-1] = n_pixels-1
+;------------------------------------------------------------
+
+arr_x = arr_pos[0,arr_dist]
+arr_y = arr_pos[1,arr_dist]
+arr_complex = COMPLEX(arr_x, arr_y)
+
+arr_fft = FFT(arr_complex)
+
+arr_fft_x = REFORM(FLOAT(arr_fft), 1, number)
+arr_fft_y = REFORM(IMAGINARY(arr_fft), 1, number)
+
+arr_sal = [arr_fft_x, arr_fft_y]
+
+
+;------------------------------------------------------------
+
+RETURN, arr_sal
+
+END
+
+;------------------------------------------------------------FUNCTION Binreg_frontier, image_o
+
+;; Función que extrae las FRONTERAS INTERIORES (separaciones) de una imagen binaria (0 y 1)
+;;
+;;      image   > la imagen de entrada binaria
+;;
+;;      retorna otra imagen con unos en el contorno de la cuenca
+;;
+
+
+;est=REPLICATE(1,3,3)
+est=[[0,1,0],[1,1,1],[0,1,0]]
+borde = image_o - erode2_bin(image_o,est)
+
+;borde = WHERE(borde EQ 1)
+
+RETURN, borde
+
+END ; Fronterabin.pro
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+FUNCTION binreg_isolate, arr_orig, XSIZE=xsize, YSIZE=ysize, IMAGE=image
+
+; Esta función tiene el objetivo de separar la parte de la imagen que contenga
+; una región binaria dada.
+;
+; La entrada son los indices de los puntos, en valor x,y. O bien absolutos con los
+; parámetros XSIZE e YSIZE
+;
+; La salida pueden ser los indices reformateados o una imagen, según la orden /IMAGE
+;
+; im_sal = binreg_isolate(arr_orig, XSIZE=xsize, YSIZE=ysize, /IMAGE)
+;--------------------------------------------------------------------------------------
+
+IF NOT KEYWORD_SET(image) THEN opt_imag = 0 ELSE opt_imag = 1
+
+
+IF N_ELEMENTS(xsize) AND N_ELEMENTS(ysize) THEN BEGIN
+
+	arr_x = LONG(arr_orig) MOD xsize
+	arr_y = LONG(arr_orig) / xsize
+
+	min_x = MIN(arr_x)
+	max_x = MAX(arr_x)
+	min_y = MIN(arr_y)
+	max_y = MAX(arr_y)
+
+	tam_x = max_x - min_x + 1
+	tam_y = max_y - min_y + 1
+
+	arr_x = arr_x - min_x
+	arr_y = arr_y - min_y
+
+	arr_sal = arr_x + (tam_x*arr_y)
+
+	IF opt_imag EQ 0 THEN BEGIN
+		RETURN, arr_sal
+	ENDIF
+
+	IF opt_imag EQ 1 THEN BEGIN
+		im_sal = BYTARR(tam_x, tam_y)
+		im_sal[arr_sal] = 1
+		RETURN, im_sal
+	ENDIF
+
+ENDIF
+
+RETURN, -1
+
+END
+FUNCTION binreg_Linedist, point_d, end_point, front_point
+
+; Calcula la distancia entre un eje definido por dos puntos  (end_point y front_point)
+; y el punto point_d
+; Se parece a  la función "all_dist" de [Parker]
+;
+; Los tres puntos están dados en formato x-y
+;
+;--------------------------------------------------------------------------------------
+
+;------------------------------------------------------------
+
+p2_x = FLOAT(end_point[0])
+p2_y = FLOAT(end_point[1])
+p1_x = FLOAT(front_point[0])
+p1_y = FLOAT(front_point[1])
+
+pd_x = FLOAT(point_d[0])
+pd_y = FLOAT(point_d[1])
+;------------------------------------------------------------
+
+IF (p1_x EQ p2_x) AND (p1_y EQ p2_y) THEN RETURN, -1
+
+;------------------------------------------------------------
+; Equation of the line is a*x + b*y +c = 0
+
+a = p2_y - p1_y
+b = p1_x - p2_x
+c = (-(p1_x - p2_x)*p1_y) + ((p1_y - p2_y)*p1_x)
+e = a*a + b*b
+dist = 0.0
+
+;------------------------------------------------------------
+
+f = a*pd_x + b*pd_y + c
+f = (f*f)/e
+
+;------------------------------------------------------------
+
+RETURN, SQRT(f)
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_LongestDimension, image_o
+
+; Retorna la distancia máxima entre dos puntos del perímetro de una región binaria
+;
+; Es el parámetro "longest Dimension" de [Jain96]
+;
+;
+;--------------------------------------------------------------------------------------
+
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+
+imag_front = fronterabin(image_o)	; Imagen Frontera
+
+arr_front = WHERE(imag_front EQ 1)
+
+arr_x = FLOAT(arr_front MOD xsize)
+arr_y = FLOAT(arr_front / xsize)
+
+n_pixels = N_ELEMENTS(arr_front)
+
+max_dist = 0
+
+FOR i=0L, n_pixels-1 DO BEGIN
+	FOR j=0L, n_pixels-1 DO BEGIN
+		dist_ij = SQRT(((arr_x[i]-arr_x[j])^2)+((arr_y[i]-arr_y[j])^2))
+		max_dist = MAX([max_dist, dist_ij])
+	ENDFOR
+ENDFOR
+
+RETURN, max_dist
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_MaximumDistance, image_o
+
+; Calcula el valor de la máxima distancia de un punto de la imagen binaria al background
+;
+; Cuidado con el efecto de bordes, por lo mal que está hecha la función MORPH_DISTANCE
+;
+;
+;--------------------------------------------------------------------------------------
+
+;imag_dist = MORPH_DISTANCE(image_o, NEIGHBOR_SAMPLING=3)
+imag_dist = binreg_distance(image_o)
+
+max_dist = MAX(imag_dist)
+
+;------------------------------------------------------------
+
+RETURN, max_dist
+
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_MaximumRadius, image_o
+
+; Calcula el valor del parámetro MAXR (radio máximo) según se define en [Jain96]
+; La distancia máxima de un punto de la imagen binaria al centro de masas
+;
+;
+;--------------------------------------------------------------------------------------
+
+centermass = binreg_centermass(image_o)	; Centro de masas en entero
+c_x = centermass[0]
+c_y = centermass[1]
+
+imag_1 = image_o*0 + 1
+imag_1[c_x, c_y] = 0
+
+;imag_dist = MORPH_DISTANCE(imag_1, NEIGHBOR_SAMPLING=3)
+imag_dist = binreg_distance(imag_1)
+arr_zeros = WHERE(image_o EQ 0)
+IF arr_zeros[0] NE -1 THEN $
+	imag_dist[arr_zeros] = 0
+
+max_dist = MAX(imag_dist)
+
+;------------------------------------------------------------
+
+RETURN, max_dist
+
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_Mer, image_o, AXIS_LENGTH = axis_length, FLOATING=floating
+
+; Devuelve las coordenadas (x,y) del mínimo rectángulo que contiene a la región binaria
+; El formato de salida es un matriz 2x4
+; Los valores de coordenada pueden ser negativos. Se corresponde a la función "mer"
+; de Parker
+;
+; Con la opción axis_length, devielve los valores de longitud del eje mayor y el menor
+; Con la opción FLOATING, no redondea el valor a entero
+; ;
+;--------------------------------------------------------------------------------------
+
+IF KEYWORD_SET(axis_length) THEN opt_axis = 1 ELSE opt_axis = 0
+IF KEYWORD_SET(floating)    THEN opt_float= 1 ELSE opt_float= 0
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+;centermass = Binreg_centermass(image_o)
+p_axis = BinReg_PrincipalAxis(image_o)
+
+c_x = FLOAT(p_axis[4])	; centro de masas
+c_y = FLOAT(p_axis[5])
+p1_x = FLOAT(p_axis[0])
+p1_y = FLOAT(p_axis[1])
+p2_x = FLOAT(p_axis[2])
+p2_y = FLOAT(p_axis[3])
+;------------------------------------------------------------
+p_minmax = BinReg_minmaxdist(image_o, [c_x, c_y], [p1_x, p1_y])
+
+pmax1_x = FLOAT(p_minmax[0])
+pmax1_y = FLOAT(p_minmax[1])
+pmax2_x = FLOAT(p_minmax[2])
+pmax2_y = FLOAT(p_minmax[3])
+;------------------------------------------------------------
+
+
+;IF opt_axis EQ 1 THEN BEGIN	; No se pide construir el rectángulo, solo medir lo
+							; Ejes menor y mayor
+
+dist_1 = binreg_Linedist([pmax1_x, pmax1_y], [c_x, c_y], [p1_x, p1_y])
+dist_2 = binreg_Linedist([pmax2_x, pmax2_y], [c_x, c_y], [p1_x, p1_y])
+
+;-------------------------------------------------------------
+; Equation of the line is a*x + b*y +c = 0 (principal axis)
+
+a = c_y - p1_y
+b = p1_x - c_x
+c = (-(p1_x - c_x)*p1_y) + ((p1_y - c_y)*p1_x)
+;------------------------------------------------------------
+; Coeficients of the minor axis
+
+a1 = b
+b1 = -a
+c1 = a*c_y -b*c_x
+e1 = a1*a1 + b1*b1
+;------------------------------------------------------------
+
+arr_imag = WHERE(image_o EQ 1)
+IF arr_imag[0] EQ -1 THEN RETURN, -1
+
+n_pixels = FLOAT(N_ELEMENTS(arr_imag))
+
+arr_y = FLOAT((arr_imag / xsize)   )	; El menor es 1, no cero
+arr_x = FLOAT((arr_imag MOD xsize) )
+
+p_min = FLOAT([0,0])
+p_max = FLOAT([0,0])
+
+dist_min = 10.0E30
+dist_max = 0.0
+;------------------------------------------------------------
+
+FOR i=0L, n_pixels -1 DO BEGIN
+	f = a1*arr_x[i] + b1*arr_y[i] + c1
+	IF f LE dist_min THEN BEGIN
+		p_min = [arr_x[i], arr_y[i]]
+		dist_min = f
+	ENDIF
+	IF f GE dist_max THEN BEGIN
+		p_max = [arr_x[i], arr_y[i]]
+		dist_max = f
+	ENDIF
+ENDFOR
+dist_min = SQRT((dist_min*dist_min) /e1)
+dist_max = SQRT((dist_max*dist_max) /e1)
+
+;------------------------------------------------------------
+
+dist_3 = ABS(dist_max)+ABS(dist_min)
+
+length_axis = [dist_3, dist_1+dist_2]
+
+IF opt_float EQ 0 THEN BEGIN
+	length_axis = FIX(ROUND(length_axis))
+ENDIF
+
+RETURN, length_axis
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_MinimumRadius, image_o
+
+; Calcula el valor del parámetro MINR (radio máximo) según se define en [Jain96]
+; La distancia a la que está el centro de masas del perímetro
+;
+; Cuidado con esta función y la de Maimumradius. Como utilizan la función
+; MORPH_DISTANCE, tienen efecto de bordes que haga que el resultado esté mal -> ARREGLAR
+;--------------------------------------------------------------------------------------
+
+centermass = binreg_centermass(image_o)	; Centro de masas en entero
+c_x = centermass[0]
+c_y = centermass[1]
+
+
+
+;imag_dist = MORPH_DISTANCE(image_o, NEIGHBOR_SAMPLING=3)
+imag_dist = binreg_distance(image_o)
+
+min_dist = imag_dist[c_x, c_y]
+
+;------------------------------------------------------------
+
+RETURN, min_dist
+
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_minmaxdist, image_o, centermass, front_point
+
+; Calcula los dos puntos de la imagen binaria más alejados del eje definido
+; por los dos puntos de entrada
+; Salida en formato de matriz 2x2 (min,max)
+; Se corresponde con la función "minmax_dist" de [Parker]
+;
+;
+;--------------------------------------------------------------------------------------
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+
+c_x = FLOAT(centermass[0])
+c_y = FLOAT(centermass[1])
+p_x = FLOAT(front_point[0])
+p_y = FLOAT(front_point[1])
+
+;------------------------------------------------------------
+
+IF (c_x EQ p_x) AND (c_y EQ p_y) THEN RETURN, -1
+
+;------------------------------------------------------------
+; Equation of the line is a*x + b*y +c = 0
+
+a = p_y - c_y
+b = c_x - p_x
+c = (-(c_x - p_x)*c_y) + ((c_y - p_y)*c_x)
+e = a*a + b*b
+dist_min = 10.0E30
+dist_max = 0.0
+
+;------------------------------------------------------------
+
+arr_imag = WHERE(image_o EQ 1)
+IF arr_imag[0] EQ -1 THEN RETURN, -1
+
+n_pixels = FLOAT(N_ELEMENTS(arr_imag))
+
+arr_y = FLOAT((arr_imag / xsize)   )	; El menor es 1, no cero
+arr_x = FLOAT((arr_imag MOD xsize) )
+
+p_min = FLOAT([0,0])
+p_max = FLOAT([0,0])
+;------------------------------------------------------------
+
+FOR i=0L, n_pixels -1 DO BEGIN
+	f = a*arr_x[i] + b*arr_y[i] + c
+	;PRINT, f
+	;PRINT, [arr_x[i], arr_y[i]]
+	IF f LE dist_min THEN BEGIN
+		p_min = [arr_x[i], arr_y[i]]
+		dist_min = f
+	ENDIF
+	IF f GE dist_max THEN BEGIN
+		p_max = [arr_x[i], arr_y[i]]
+		dist_max = f
+	ENDIF
+ENDFOR
+
+;------------------------------------------------------------
+
+RETURN, FIX(ROUND([[p_min], [p_max]]))
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_MinorAxis, image_o
+
+; Obtiene las coordenadas [x,y]) de dos extremos del eje menor de una imagen binaria
+; y del centro de masas (por el que debe pasar)
+; El formato de salida es un matriz 2x3
+; (1 - Objeto, 0 - fondo)
+;
+; Según el algoritmo propuesto por [Parker], para obtener el eje principal, y a partir de
+; este y perpendicular, el eje menor (quetambién pasa por el centro de masas)
+;
+;--------------------------------------------------------------------------------------
+
+imag = image_o
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+sal_paxis = binreg_principalaxis(image_o)
+;------------------------------------------------------------
+
+c_x = FLOAT(sal_paxis[4])
+c_y = FLOAT(sal_paxis[5])
+p1_x = FLOAT(sal_paxis[0])
+p1_y = FLOAT(sal_paxis[1])
+p2_x = FLOAT(sal_paxis[2])
+p2_y = FLOAT(sal_paxis[3])
+
+;------------------------------------------------------------
+
+IF (p1_x EQ p2_x) AND (p1_y EQ p2_y) THEN RETURN, -1
+
+;------------------------------------------------------------
+; Equation of the line is a*x + b*y +c = 0 (principal axis)
+
+a = p2_y - p1_y
+b = p1_x - p2_x
+c = (-(p1_x - p2_x)*p1_y) + ((p1_y - p2_y)*p1_x)
+
+;------------------------------------------------------------
+; Coeficients of the minor axis
+
+a1 = b
+b1 = -a
+c1 = a*c_y -b*c_x
+
+;------------------------------------------------------------
+
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_Moments, image_o, image_gray, NI=ni, NJ=nj, NORMALIZE=normalize
+
+; Obtiene los momentos centrales de una imagen binaria (momento, ni, nj)
+; (1 - Objeto, 0 - fondo)
+;
+; Con la opción NORMALIZE se calculan los momentos standard
+; Si se añade una segunda imagen, entonces se calculan los momentos de imagen de gris
+;
+;
+;--------------------------------------------------------------------------------------
+
+IF N_PARAMS() EQ 2 THEN opt_gray = 1 ELSE opt_gray = 0
+IF KEYWORD_SET(normalize) THEN opt_normal = 1 ELSE opt_normal = 0
+
+IF N_ELEMENTS(ni) EQ 0 THEN RETURN, -1
+IF N_ELEMENTS(nj) EQ 0 THEN RETURN, -1
+
+;--------------------------------------------------------------------------------------
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+
+arr_imag = WHERE(image_o EQ 1)
+IF arr_imag[0] EQ -1 THEN RETURN, -1
+
+n_pixels = FLOAT(N_ELEMENTS(arr_imag))
+
+arr_y = FLOAT((arr_imag / xsize)  ) + 1
+arr_x = FLOAT((arr_imag MOD xsize)) + 1
+
+;------------------------------------------------------------
+
+IF opt_gray EQ 0 THEN BEGIN
+	c_x = (TOTAL(arr_x)/n_pixels)
+	c_y = (TOTAL(arr_y)/n_pixels)
+ENDIF
+IF opt_gray EQ 1 THEN BEGIN ; Centro de masas de imagen de gris
+
+	arr_val = image_gray[arr_imag]
+
+	c_x = (TOTAL(arr_x*arr_val)/ TOTAL(arr_val))
+	c_y = (TOTAL(arr_y*arr_val)/ TOTAL(arr_val))
+ENDIF
+;------------------------------------------------------------
+
+IF opt_gray EQ 0 THEN BEGIN
+	moment = TOTAL(((arr_x-c_x)^ni)*((arr_y-c_y)^nj))
+    IF opt_normal EQ 1 THEN moment = moment/n_pixels
+
+ENDIF
+
+IF opt_gray EQ 1 THEN BEGIN ; Centro de masas de imagen de gris
+	moment = TOTAL(((arr_x-c_x)^ni)*((arr_y-c_y)^nj)*image_gray[arr_imag])
+	IF opt_normal EQ 1 THEN moment = moment/TOTAL(image_gray[arr_imag])
+
+ENDIF
+
+
+
+;------------------------------------------------------------
+
+RETURN, moment
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_orderperimeter, image_o
+
+; Retorna un array ordenado de posiciones [x,y,xy] del perímetro de una forma binaria
+; Ojito, porque puede repetir valores (tiene que recorrer el perímetro hasta cerrarlo
+;
+;--------------------------------------------------------------------------------------
+
+image = enmarca2d(image_o)	; Evita problemas de bordes
+
+tam = SIZE(image)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+imag_perim = binreg_frontier(image)
+imag_index = LONG(imag_perim*0) ; imagen con los indices iguales al orden de
+								; anñalisis de los píxeles
+
+arr_pos = WHERE(imag_perim EQ 1)
+
+IF arr_pos[0] EQ -1 THEN RETURN, -1
+
+;------------------------------------------------------------
+
+arr_vecc = LONARR(8)
+
+pos_ini = arr_pos[0]
+pos_act = pos_ini
+imag_index[pos_ini] = 1
+
+arr_ordered = [pos_ini]
+index = 2
+
+FOR i=2l, 10000 DO BEGIN
+
+	arr_vecc[0] = [pos_act - xsize +1]
+	arr_vecc[1] = [pos_act + 1]			; Vecinos en orden de las manecillas del reloj
+	arr_vecc[2] = [pos_act + xsize +1]
+	arr_vecc[3] = [pos_act + xsize]
+	arr_vecc[4] = [pos_act + xsize -1]
+	arr_vecc[5] = [pos_act - 1]
+	arr_vecc[6] = [pos_act - xsize -1]
+	arr_vecc[7] = [pos_act - xsize]
+
+	arr_1 = WHERE(imag_perim[arr_vecc] LT 3 AND imag_perim[arr_vecc] GT 0)
+	IF arr_1[0] NE -1 THEN BEGIN
+
+		arr_vecc2 = arr_vecc[arr_1]
+		arr_index = imag_index[arr_vecc2]
+		pos = (WHERE(arr_index EQ MIN(arr_index)))[0]
+		pos_act = arr_vecc2[pos]
+
+		imag_perim[pos_act] = imag_perim[pos_act] + 1
+		imag_index[pos_act] = index
+		index = index + 1
+
+	ENDIF ELSE BEGIN
+		GOTO, fin_for	; Todos marcados a 3
+	ENDELSE
+
+	arr_ordered = [arr_ordered, pos_act]
+
+ENDFOR
+
+fin_for:
+;------------------------------------------------------------
+
+arr_orderedxy = LONARR(3, N_ELEMENTS(arr_ordered))
+arr_orderedxy[0,*] = (arr_ordered MOD xsize) -1
+arr_orderedxy[1,*] = (arr_ordered / xsize)   -1	; Restamos 1 para quitar el marco
+
+arr_orderedxy[2,*] = arr_orderedxy[0,*] + arr_orderedxy[1,*]*(xsize-2)
+RETURN, arr_orderedxy
+
+END
+
+
+
+;------------------------------------------------------------
+;------------------------------------------------------------
+FUNCTION binreg_origin, arr_orig, XSIZE=xsize, YSIZE=ysize
+
+; Esta función devuelve las coordenadas del origen de una región dada por sus puntos
+; La salida es en formato (x,y)
+; Esquina izquierda y arriba del cuadrado a 90 grados que contiene a la región
+; una región binaria dada.
+;
+; La entrada son los indices de los puntos, en valor x,y. O bien absolutos con los
+; parámetros XSIZE e YSIZE
+;
+; Esta función debe estar "sincronizada" con binreg_isolate.
+;
+; origin = binreg_origin(arr_orig, XSIZE=xsize, YSIZE=ysize)
+;--------------------------------------------------------------------------------------
+
+IF NOT KEYWORD_SET(image) THEN opt_imag = 0 ELSE opt_imag = 1
+
+IF N_ELEMENTS(xsize) AND N_ELEMENTS(ysize) THEN BEGIN
+
+	arr_x = LONG(arr_orig) MOD xsize
+	arr_y = LONG(arr_orig) / xsize
+
+	min_x = MIN(arr_x)
+	min_y = MIN(arr_y)
+
+	RETURN, [min_x, min_y]
+
+ENDIF
+
+
+RETURN, -1
+
+END
+FUNCTION binreg_Perimeter, image_o, OPTION=option
+
+; Obtiene el valor numérico del perímetro de una imagen binaria
+; (1 - Objeto, 0 - fondo)
+;
+; Aquí la entrada es una imagen binaria (habrá que separar)
+;
+; OPTION - 1, según la medida propuesta en el libro de C
+;        - 2, Más basta
+;
+; La salida pueden ser los indices reformateados o una imagen, según la orden /IMAGE
+;
+; im_sal = binreg_Perimeter(arr_orig, XSIZE=xsize, YSIZE=ysize)
+;
+;--------------------------------------------------------------------------------------
+
+
+IF N_ELEMENTS(option) EQ 0 THEN opt = 1 ELSE opt = option
+
+image_bin= enmarca2d(image_o)
+
+tam = SIZE(image_bin)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+
+;------------------------------------------------------------
+IF opt EQ 2 THEN BEGIN
+
+	perimeter = 0D
+
+	FOR j=1L, ysize-2 DO BEGIN
+		FOR i=1L, xsize-2 DO BEGIN
+			per_pix = 0D
+			IF image_bin[i,j] EQ 1 THEN BEGIN	; Pixel object
+				v1 = image_bin[i-1,j  ] EQ 0
+				v2 = image_bin[i+1,j  ] EQ 0
+				v3 = image_bin[i,  j-1] EQ 0
+				v4 = image_bin[i,  j+1] EQ 0
+
+				per_pix = SQRT(0D + v1 + v2 + v3 + v4)
+			ENDIF
+			perimeter = perimeter + per_pix
+		ENDFOR
+	ENDFOR
+
+	RETURN, perimeter
+ENDIF
+;------------------------------------------------------------
+IF opt EQ 1 THEN BEGIN
+
+	image_perim = image_bin*0
+	;image_per   = image_bin*0
+	perimeter = 0D
+	val_1 = 1D
+	val_2 = SQRT(2)
+	val_3 = (val_2 + val_1)/2
+
+	;FOR j=1L, ysize-2 DO BEGIN		; Contruct image of perimeter
+	;	FOR i=1L, xsize-2 DO BEGIN
+	;		IF image_bin[i,j] EQ 1 THEN BEGIN ; PIxel object
+	;			v1 = image_bin[i-1,j  ]
+	;			v2 = image_bin[i+1,j  ]
+	;			v3 = image_bin[i,  j-1]
+	;			v4 = image_bin[i,  j+1]
+	;			IF (v1+ v2 +v3 +v4) NE 4 THEN BEGIN ; Perimeter Pixel (4 neighbours)
+	;				image_perim[i,j] = 1
+	;			ENDIF
+	;		ENDIF
+	;	ENDFOR
+	;ENDFOR
+
+	image_perim = Binreg_frontier(image_bin)
+
+	FOR j=1L, ysize-2 DO BEGIN		; Measures perimeter with templates
+		FOR i=1L, xsize-2 DO BEGIN
+			IF image_perim[i,j] EQ 1 THEN BEGIN
+				v1 = image_perim[i-1,j  ] + $
+					image_perim[i+1,j  ] + $
+					image_perim[i,  j-1] + $
+					image_perim[i,  j+1]
+
+				IF v1 GE 2 THEN $
+					perimeter = perimeter + val_1 $
+				ELSE IF v1 EQ 1 THEN $
+					perimeter = perimeter + val_3 $
+				ELSE IF v1 EQ 0 THEN $
+					perimeter = perimeter + val_2
+
+				;image_per[i,j] = v1
+			ENDIF
+		ENDFOR
+	ENDFOR
+
+	IF perimeter EQ 255 THEN BEGIN
+		PRINT, 'hello'
+	ENDIF
+
+	RETURN, perimeter
+
+ENDIF
+
+END
+FUNCTION binreg_PrincipalAxis, image_o
+
+; Obtiene las coordenadas [x,y]) de dos extremos del eje principal de una imagen binaria
+; y del centro de masas (por el que debe pasar)
+; El formato de salida es un matriz 2x3
+; (1 - Objeto, 0 - fondo)
+;
+; Según el algoritmo propuesto por [Parker]
+;
+;--------------------------------------------------------------------------------------
+
+imag = image_o
+
+tam = SIZE(image_o)
+xsize = tam[1]
+ysize = tam[2]
+xysize = LONG(xsize)*ysize
+;------------------------------------------------------------
+
+centermass = binreg_centermass(image_o)
+c_x = FLOAT(centermass[0])
+c_y = FLOAT(centermass[1])
+centermassxy = c_x + c_y*xsize
+
+;------------------------------------------------------------
+
+imag_front = binreg_frontier(image_o)
+
+arr_border = WHERE(imag_front EQ 1)
+IF arr_border[0] EQ -1 THEN RETURN, -1
+
+pos_1 = WHERE(arr_border LT centermassxy)
+pos_2 = WHERE(arr_border GT centermassxy)
+IF pos_1[0] NE -1 THEN $
+	arr_border_1 = arr_border[pos_1] $
+ELSE $
+	arr_border_1 = centermassxy
+IF pos_2[0] NE -1 THEN $
+	arr_border_2 = arr_border[pos_2] $
+ELSE $
+	arr_border_2 = centermassxy
+
+
+n_pixels_1 = FLOAT(N_ELEMENTS(arr_border_1))
+n_pixels_2 = FLOAT(N_ELEMENTS(arr_border_2))
+
+arr_y1 = FLOAT((arr_border_1 / xsize)  )
+arr_x1 = FLOAT((arr_border_1 MOD xsize))
+arr_y2 = FLOAT((arr_border_2 / xsize)  )
+arr_x2 = FLOAT((arr_border_2 MOD xsize))
+
+;------------------------------------------------------------
+paxis_1 = centermass
+paxis_2 = centermass
+paxis_3 = centermass
+;-------------------------------------------------------------
+dist_min = FLOAT(10e30)
+FOR i=0L, n_pixels_1-1 DO BEGIN
+	dist = Binreg_alldist(image_o, centermass, [arr_x1[i], arr_y1[i]])
+	IF dist NE -1 THEN BEGIN
+		IF dist LE dist_min THEN BEGIN
+			dist_min = dist
+			paxis_1   = [arr_x1[i], arr_y1[i]]
+		ENDIF
+	ENDIF
+ENDFOR
+IF dist_min EQ 10e30 THEN BEGIN	; Error, o solamente un punto en la region
+	paxis_1 = centermass
+ENDIF
+dist_min = FLOAT(10e30)
+;------------------------------------------------------------
+FOR i=0L, n_pixels_2-1 DO BEGIN
+	dist = Binreg_alldist(image_o, centermass, [arr_x2[i], arr_y2[i]])
+	IF dist NE -1 THEN BEGIN
+		IF dist LE dist_min THEN BEGIN
+			dist_min = dist
+			paxis_2   = [arr_x2[i], arr_y2[i]]
+		ENDIF
+	ENDIF
+ENDFOR
+IF dist_min EQ 10e30 THEN BEGIN	; Error, o solamente un punto en la region
+	paxis_2 = centermass
+ENDIF
+;------------------------------------------------------------
+
+ret =[[paxis_1], [paxis_2], [centermass]]
+
+RETURN, FIX(ROUND(ret))
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_Rectangularity, image_o
+
+; Calcula el valor de rectangularidad de una forma binaria
+; Tal como se define en [Parker93], como el cociente entre el area del objeto y el
+; area del minimo rectangulo que la circunscribe (MER).
+; Aquí se emplea el MER mínimo orientado según los ejes principales.
+;
+;
+;
+;--------------------------------------------------------------------------------------
+
+rect_length = binreg_mer(image_o, /AXIS_LENGTH, /FLOATING)
+
+length_1 = rect_length[0]
+length_2 = rect_length[1]
+
+Mer_area = (length_1+1)*(length_2+1)
+
+area  = TOTAL(image_o)
+
+Rr = FLOAT(area)/Mer_area
+
+IF Rr GT 1.0 THEN BEGIN
+	PRINT, 'Breakpoint'
+ENDIF
+
+;------------------------------------------------------------
+
+RETURN, Rr
+
+
+END
+
+;------------------------------------------------------------
+FUNCTION binreg_thinness, image_o
+
+; Obtiene el parámetro 'Thinness' de una región binaria
+; Definción según [Jain96]
+;
+; Cuanto más "alargado" es el objeto, menor es este parámetro
+;
+;--------------------------------------------------------------------------------------
+
+m_11 = binreg_moments(image_o, NI=1, NJ=1)
+m_20 = binreg_moments(image_o, NI=2, NJ=0)
+m_02 = binreg_moments(image_o, NI=0, NJ=2)
+
+;------------------------------------------------------------
+im_matrix = [[m_20, -m_11],[-m_11, m_02]]
+
+eigenvals = EIGENQL(im_matrix)
+
+thinness = MIN(eigenvals)/MAX(eigenvals)
+
+RETURN, thinness
+
+END
+
+
+;------------------------------------------------------------
