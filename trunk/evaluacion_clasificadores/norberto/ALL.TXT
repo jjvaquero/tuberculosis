@@ -1,0 +1,2257 @@
+
+FUNCTION baciles_detect, image_o, IDL=idl, $
+	THRESHOLD=threshold, FILTER=filter, RADIUS=radius
+
+; Separa los bacilos para obtener sus características
+; La salida es una imagen máscara donde cada candidato a bacilo tiene su identificador, de
+; 1 a 32000. El cero es para el fondo
+
+; Deteccion de bacilos en imagenes de auramina
+; Entrada: Imagen original de tres canales de color, tal cual es leida del disco
+; Salida:  Imagen etiquetada de los bacilos detectados
+;
+; Con opción IDL, realiza la recosntrucción en IDL (algo distinto el resultado)
+;
+; Pasos que realiza:
+;
+;  1 - Extrae el canal verde:
+;  2 - Filtrado binomial
+;  3 - Opening (Erosión + dilatación)
+;  4 - Recontrucción morfológica del opening sobre la imagen original
+;  5 - Imagen original menos reconstruida
+;      Los pasos 3,4 y 5 son un TopHat con reconstrucción (extracción de cúpulas)
+;  6 - Umbralización del tophat
+;
+;  Tiene 4 parámetros:
+;
+;  RADIUS    - Radio del Elemento estructurante del opening
+;  FILTER    - Diámetro del filtro binomial 2D
+;  THRESHOLD - El valor de la umbralización
+;  Elem. Estructurante de la reconstrucción (en /IDL los dos son iguales) - No modificable
+
+
+;-----------------------------------------------------------------------------------------
+
+IF KEYWORD_SET(idl) THEN opt_idl = 1 ELSE opt_idl = 0
+
+;-----------------------------------------------------------------------------------------
+; Parámetros fijados
+
+
+IF N_ELEMENTS(threshold) EQ 0 THEN fix_level  = 30 ELSE fix_level  = threshold
+IF N_ELEMENTS(radius)    EQ 0 THEN fix_radius = 6  ELSE fix_radius = radius
+IF N_ELEMENTS(filter)    EQ 0 THEN fix_binomial_filter = 5 ELSE fix_binomial_filter = filter
+
+;fix_radius = 6  ; 5
+;fix_level  = 30 ; 35
+;fix_binomial_diamenter = 5;
+;-----------------------------------------------------------------------------------------
+
+size_framing = fix_radius*2 + 1
+
+tam = SIZE(image_o)
+
+IF tam[1] EQ 3 THEN BEGIN	;TRUE=1
+	image_og = REFORM(image_o[1,*,*])		; Canal verde
+ENDIF
+IF tam[3] EQ 3 THEN BEGIN	;TRUE=3
+	image_og = REFORM(image_o[*,*,1])		; Canal verde
+ENDIF
+
+image_og2 = FIX(filter_Binomial_2d(image_og, DIAMETER=fix_binomial_diameter))
+
+image_ogf = image_framing2d(image_og2, size_framing,0)
+
+kernel    = UINT(crea_disco(fix_radius))
+
+im_open = MORPH_OPEN(UINT(image_ogf), kernel, /GRAY, /PRESERVE_TYPE)
+; opim = grayopen(im,Estructura=kernel) -> Erosión + dilatación
+
+; White top-hat  => original - opening
+; Black toop-hat => closing  - original
+; Aquí se hace un top-hat blanco pero con reconstrucción de opening ("opening by reconstruction")
+
+IF opt_idl EQ 1 THEN BEGIN
+	im_rec = reconstruction(image_ogf, im_open, ESTRUCTURA=kernel)
+ENDIF ELSE BEGIN
+	im_rec = reconstruction_c(image_ogf, im_open, OPTION=4)
+	; Kernel = de  7x7 hay que hacerlo con cualquier kernel
+	; Con OPTION=3, kernel de cruz
+	;im_rec    = reconstruction_c(image_og, im_open, OPTION=5, RADIUS=5)
+	; El kernel es un circulo de radio 5
+ENDELSE
+
+im_tophat = image_ogf - im_rec
+
+im_sal = im_tophat GT fix_level
+
+im_sal = image_deframing2d(im_sal, size_framing)
+
+RETURN, im_sal
+
+END
+
+;@Carga_imag_baciles
+
+path_images_original = 'e:\micro\images_positive\'
+path_images_results  = 'e:\micro\results\images_positive\'
+
+culture = '21_09_01\'
+image   = 'image1'
+
+
+path_imag_orig   = path_images_original + culture + image + '.tif'
+
+path_imag_marked1 = path_images_original + culture + image + 'mar.tif'
+
+path_imag_marked2 = path_images_original + culture + image + '_marked.tif'
+
+path_imag_mask   = path_images_results + culture + 'prueba_1\' +image +'_mask1.tif'
+
+
+im_orig = READ_TIFF(path_imag_orig, ORDER=order1)
+im_mask = READ_TIFF(path_imag_mask, ORDER=order2)
+im_marked1 = READ_TIFF(path_imag_marked1, ORDER=order3)
+im_marked2 = READ_TIFF(path_imag_marked2, ORDER=order4)
+
+tam = SIZE(im_mask)
+xsize = tam[1]
+ysize = tam[2]
+
+;arr = WHERE(im_mask EQ 23)
+;im  = binreg_isolate(arr, XSIZE=xsize, YSIZE=ysize, /IMAGE)
+;imc = binreg_colorisolate(arr, im_orig, XSIZE=xsize, YSIZE=ysize)
+
+
+
+
+
+FUNCTION Classify_class, im_mask, im_marked
+
+; Toma como partida una imagen etiquetada y otra imagen marcada a mi estilo (de tras canales)
+; La salida es otra imagen etiquetada donde los bacilos toman los siguientes valores:
+;
+; 1 - Es bacilo
+; 2 - No es bacilo
+; 3 - Dudoso
+
+;----------------------------------------------------------------------------------------
+
+T = SYSTIME(1)
+
+xsize = (SIZE(im_mask))[1]
+ysize = (SIZE(im_mask))[2]
+
+im_recs = INTARR(xsize, ysize)
+im_circl= INTARR(xsize, ysize)
+im_etiq = INTARR(xsize, ysize)
+
+im_recs = FIX(im_marked[0,*,*]) +  im_marked[1,*,*] +  im_marked[2,*,*]
+im_recs = im_recs GT 760	; Mayor que 253 en los tres canales:
+arr_class_1 = WHERE(im_recs  EQ 1, count_1)
+IF count_1 GT 0 THEN $
+	im_etiq[arr_class_1] = 1
+undefine, im_recs
+
+im_circl = (im_marked[0,*,*] EQ 255) AND (im_marked[1,*,*] LT 150)	; Igual a 255 en el canal rojo
+arr_class_3 = WHERE(im_circl  EQ 1, count_3)
+IF count_3 GT 0 THEN $
+	im_etiq[arr_class_3] = 3
+
+undefine, im_circl
+
+
+;----------------------------------------------------------
+
+n_regs = MAX(im_mask)
+im_sal = im_mask
+
+FOR i=1L, n_regs DO BEGIN
+	arr_pospixel = WHERE(im_mask EQ i, count)
+	IF count GT 0 THEN BEGIN
+		num_class  = im_etiq[arr_pospixel[0]]
+		IF num_class EQ 0 THEN num_class = 2
+		im_sal[arr_pospixel] = num_class
+	ENDIF
+ENDFOR
+
+;----------------------------------------------------------
+
+PRINT, 'Tiempo de Classify Class  :',  SYSTIME(1)-T
+
+RETURN, im_sal
+
+END
+
+
+
+
+
+
+
+
+
+
+
+FUNCTION FBatch_Baciles_Segment_1, CULTURE=culture
+
+; ok = FBatch_Baciles_Segment_1(CULTURE='21_09_01')
+;
+; El objetivo de esta función es aplicar un algoritmo de segmentación (o en principio de
+; cualquier otro tipo) a las imágenes almacenadas en un directorio y grabar los resultados en
+; otro directorio especificado
+;
+; Al ser de tipo "batch" aunque sigue siendo una función, los parámetros se introducirán
+; internamente (en el código) por defecto.
+;
+;
+;
+; El directorio de las imágenes que se van a procesar
+; Se procesarán todas las imágenes de ese directorio
+;-----------------------------------------------------------------------------
+
+str_disk = 'e:' ;'e:'
+
+path_images_original = str_disk + '\micro\images\'
+path_images_results  = str_disk + '\micro\results\'
+
+
+IF N_ELEMENTS(culture) EQ 0 THEN BEGIN
+	culture = '21_09_01'
+	pathadd_directory    = culture + '\'  ; 13_10_01\ ; 27_09_01
+ENDIF ELSE BEGIN
+	IF STRPOS(culture, '\') EQ -1 THEN $
+		pathadd_directory    = culture +'\' $
+	ELSE pathadd_directory   = culture
+ENDELSE
+
+;pathadd_session      = 'Prueba_1\'
+pathadd_session      = ''
+
+path_results  = path_images_results  + pathadd_directory + pathadd_session
+path_original = path_images_original + pathadd_directory
+
+pathw_results = strmid(path_results, 0, STRLEN(path_results)-1)
+
+IF file_test(pathw_results, /directory) EQ 0 THEN BEGIN
+	FILE_MKDIR, path_results
+ENDIF
+
+
+; Busca todas las imagenes del directorio
+;-------------------------------------------------------------------------------
+str_out = 'mar.tif'
+str_fileimages = FINDFILE(path_original+'*.tif')
+str_fileimages = STRLOWCASE(str_fileimages)
+n_images = N_ELEMENTS(str_fileimages)
+
+matcharr_string    = STRPOS(str_fileimages, str_out)
+pos_fileimages_out = WHERE(matcharr_string NE -1)
+
+IF pos_fileimages_out[0] NE -1 THEN BEGIN	;hay imagenes que hay que descartar
+	str_fileimages[pos_fileimages_out] = ''
+ENDIF
+str_fileimages_2 = ''
+FOR i=0L, n_images-1 DO BEGIN
+	IF str_fileimages[i] NE '' THEN BEGIN
+		str_aux = str_fileimages[i]
+		str_fileimages_2 = [str_fileimages_2, str_aux]
+	ENDIF
+ENDFOR
+IF N_ELEMENTS(str_fileimages_2) GT 1 THEN BEGIN
+	str_fileimages_2 = str_fileimages_2[1:N_ELEMENTS(str_fileimages_2)-1]
+ENDIF
+str_fileimages = REFORM(str_fileimages_2, 1, N_ELEMENTS(str_fileimages_2))
+n_images       = N_ELEMENTS(str_fileimages)
+;------------------------------------------------------------------------------
+
+; ahora el bath de segmentación con todas las imágenes
+
+IF n_images EQ 1 AND str_fileimages[0] EQ '' THEN BEGIN
+	PRINT, ' Ninguna imagen en el subdirectorio'
+	RETURN, -1
+ENDIF
+
+;--------------------------------------------------------------------
+
+FOR i=0L, n_images-1 DO BEGIN
+
+	pathc_image_o  = str_fileimages[i]
+	;patgc_image_s1 = path_results +
+
+	pos_file     = STRPOS(pathc_image_o, '\', /REVERSE_SEARCH)
+	file_image_o = STRMID(pathc_image_o, pos_file+1)
+	str_aux      = STRSPLIT(file_image_o, '.', /EXTRACT)
+
+	file_image_s1 = str_aux[0] + '_mask1.' + str_aux[1]
+	file_image_s2 = str_aux[0] + '_sal2.' + str_aux[1]
+
+	pathc_image_s1 = path_results + file_image_s1
+
+	;--------------------------------------------------------------
+
+	image_o = READ_TIFF(pathc_image_o, ORDER=order)
+
+	PRINT, 'Procesando la imagen ', STRTRIM(i,2), ' de ', STRTRIM(n_images, 2)
+	PRINT, 'Imagen:  ', pathc_image_o
+	PRINT, ''
+	;***********************************************
+	;***********************************************
+	; Segmentacion
+	image_s = Baciles_detect(image_o, THRESHOLD=30, FILTER=5, RADIUS=6)
+	image_s = marcaminimos_c(image_s)			; Marcado
+	image_s = immarked_elim(image_s, 60, /EQUAL, /LIMIT255, /BORDER)
+										; Elimina lo marcado menor de 10
+										; Y limita a 255 marcas
+	;***********************************************
+	;***********************************************
+
+	WRITE_TIFF, pathc_image_s1, image_s, order
+	;-------------------------------------------------------------
+
+
+ENDFOR
+
+RETURN, 1
+
+END
+
+
+
+
+
+
+
+
+
+
+
+;Fbatch_baciles_toSPSS_1
+
+;
+; ok = Fbatch_baciles_toSPSS_1(CULTURE='21_09_01', /MARKED)
+;
+; el objetivo (bastante ambicioso) se esta función es leer una serie de imágenes originales,
+; sus máscaras de segmentación, evaluar las características de los candidatos a bacilos y crear
+; un archivo de texto que pueda leer el Programa SPSS
+;
+; Además también tiene que saber leer automáticamente una imagen marcada manualmente y asignarle a
+; cada candidato bacilo una etiqueta de 1 ,2, 3. Según la marcación manual (esto lo incluiremos
+; como parámetro para imagenes marcadas (si existen)
+;
+; Como los parámetros de las imágenes son bastantes. Se decide crear dos archivos de tabuladores
+;
+; Con el keyword /ADVANCED, se crea otra serie de archivos con otros parámetros
+;
+;
+;-------------------------------------------------------------------------------------------
+
+FUNCTION  Fbatch_baciles_toSPSS_1, CULTURE=culture, MARKED=marked, $
+									ADVANCED=advanced, SIMPLE=simple, MOMENTS=moments
+
+
+IF KEYWORD_SET(marked)   THEN opt_marked   = 1 ELSE opt_marked=0
+IF KEYWORD_SET(advanced) THEN opt_advanced = 1 ELSE opt_advanced = 0
+IF KEYWORD_SET(simple)   THEN opt_simple   = 1 ELSE opt_simple   = 0
+IF KEYWORD_SET(moments)  THEN opt_moments  = 1 ELSE opt_moments  = 0
+;-------------------------------------------------------------------------------------------
+
+str_disk = 'e:' ;'e:'
+
+path_images_original = str_disk + '\micro\images\'
+path_images_results  = str_disk + '\micro\results\'
+
+
+IF N_ELEMENTS(culture) EQ 0 THEN BEGIN
+	culture = '21_09_01'
+	pathadd_directory    = culture + '\'  ; 13_10_01\ ; 27_09_01
+ENDIF ELSE BEGIN
+	IF STRPOS(culture, '\') EQ -1 THEN $
+		pathadd_directory     = culture +'\' $
+	ELSE pathadd_directory    = culture
+ENDELSE
+
+;pathadd_session      = 'Prueba_1\'
+pathadd_session      = ''
+
+path_results  = path_images_results  + pathadd_directory + pathadd_session
+path_original = path_images_original + pathadd_directory
+path_marked   = path_images_original + pathadd_directory + 'marked\'
+
+; Busca todas las imagenes del directorio
+;-------------------------------------------------------------------------------
+str_out = 'mar.tif'
+str_fileimages = FINDFILE(path_original+'*.tif')
+str_fileimages = STRLOWCASE(str_fileimages)
+n_images = N_ELEMENTS(str_fileimages)
+
+matcharr_string    = STRPOS(str_fileimages, str_out)
+pos_fileimages_out = WHERE(matcharr_string NE -1)
+
+IF pos_fileimages_out[0] NE -1 THEN BEGIN	;hay imagenes que hay que descartar
+	str_fileimages[pos_fileimages_out] = ''
+ENDIF
+str_fileimages_2 = ''
+FOR i=0L, n_images-1 DO BEGIN
+	IF str_fileimages[i] NE '' THEN BEGIN
+		str_aux = str_fileimages[i]
+		str_fileimages_2 = [str_fileimages_2, str_aux]
+	ENDIF
+ENDFOR
+IF N_ELEMENTS(str_fileimages_2) GT 1 THEN BEGIN
+	str_fileimages_2 = str_fileimages_2[1:N_ELEMENTS(str_fileimages_2)-1]
+ENDIF
+str_fileimages = REFORM(str_fileimages_2, 1, N_ELEMENTS(str_fileimages_2))
+n_images       = N_ELEMENTS(str_fileimages)
+
+; Ahora separa el path de la fila
+;------------------------------------------------------------------------------
+FOR i=0l, n_images-1 DO BEGIN
+	pos = STRPOS(str_fileimages[i], '\', /REVERSE_SEARCH)
+	str_fileimages[i] = STRMID(str_fileimages[i], pos+1)
+	pos = STRPOS(str_fileimages[i], '.')
+	str_fileimages[i] = STRMID(str_fileimages[i], 0, pos)
+ENDFOR
+;------------------------------------------------------------------------------
+; Ahora busca las imagenes marcadas,
+IF opt_marked EQ 1 THEN BEGIN
+	str_fileimagesmarked = STRARR(1, n_images)
+	str_fileimagesmarked = str_fileimages + 'marked'
+ENDIF
+;------------------------------------------------------------------------------
+; Ahora busca las imagenes segmentadas,
+str_fileimagessegmented = STRARR(1, n_images)
+str_fileimagessegmented  = str_fileimages + '_mask1'
+
+;------------------------------------------------------------------------------
+
+; Ya tenemos los arrays de strings con las imagenenes originales, marcadas y segmentadas
+; (deberán tener igual número de elementos y estar ordenadas)
+; Por lo tanto, a leer y ver datos
+;------------------------------------------------------------------------------
+
+FOR i=0L, n_images-1  DO BEGIN
+
+	file_im_orig   = str_fileimages[i] + '.tif'
+	file_im_mask   = str_fileimagessegmented[i] + '.tif'
+
+	im_orig   = READ_TIFF(path_original + file_im_orig,  ORDER=order1)
+	im_mask   = READ_TIFF(path_results  + file_im_mask,  ORDER=order3)
+	IF opt_marked EQ 1 THEN BEGIN
+		file_im_marked = str_fileimagesmarked[i] + '.tif'
+		im_marked = READ_TIFF(path_marked   + file_im_marked, ORDER=order2)
+		im_marked = classify_class(im_mask, im_marked)
+	ENDIF
+
+	;-------------------------------------------------------
+	pos_aux     = STRPOS(file_im_orig, '.')
+	str_number1 = STRMID(file_im_orig, pos_aux-2, 1)
+	str_number2 = STRMID(file_im_orig, pos_aux-1, 1)
+	ascii_num1  = (BYTE(str_number1))[0]
+	ascii_num2  = (BYTE(str_number2))[0]
+	IF (ascii_num1 LT 48) OR (ascii_num1 GT 57) THEN $
+		str_number = str_number2 $
+	ELSE $
+		str_number = str_number1 + str_number2
+	;-------------------------------------------------------
+
+
+	length_number = STRLEN(str_number)
+	IF length_number EQ 1 THEN BEGIN	; Cambiamos '1' a '01'
+	   strarr_parts = STRSPLIT(str_fileimages[i], str_number, /EXTRACT, /PRESERVE_NULL)
+	   str_filename = strarr_parts[0] + '0' + str_number + strarr_parts[1]
+	ENDIF ELSE BEGIN
+		str_filename = str_fileimages[i]
+	ENDELSE
+
+	;-------------------------------------------------------
+	str_ind = '_i'
+	IF opt_simple   EQ 1 THEN str_ind = str_ind + 'S'
+	IF opt_advanced EQ 1 THEN str_ind = str_ind + 'A'
+	IF opt_moments  EQ 1 THEN str_ind = str_ind + 'M'
+
+	file_spss = path_results + str_filename + '_IDL_spss' + str_ind + '.txt'
+
+	IF i EQ 0L THEN opt_head = 1 ELSE opt_head = 0
+
+	IF (opt_marked EQ 1) THEN BEGIN
+		;****************************************************************************
+		ok = Write_SPSS_archive_2(file_spss, im_orig, im_mask, IM_MARKED=im_marked, $
+			CULTURE=culture, N_IMAGE=str_number, HEAD=opt_head, $
+			SIMPLE=simple, ADVANCED=opt_advanced, MOMENTS=opt_moments)
+		;****************************************************************************
+	ENDIF ELSE BEGIN
+		;****************************************************************************
+		ok = Write_SPSS_archive_2(file_spss, im_orig, im_mask, $
+			CULTURE=culture, N_IMAGE=str_number,  HEAD=opt_head, $
+			SIMPLE=simple, ADVANCED=opt_advanced, MOMENTS=opt_moments)
+		;****************************************************************************
+	ENDELSE
+
+	PRINT, 'Nueva imagen  ', i , ' de ' , n_images
+
+ENDFOR
+
+PRINT, 'yastá'
+
+RETURN, 1
+
+END
+
+
+
+
+
+FUNCTION fbatch_jointtabfiles_1, CULTURE=culture, STR=str
+
+; ok =  fbatch_jointtabfiles_1(CULTURE='21_09_01', STR='iSA.txt')
+;
+; Esta función es de gestión de archivos de texto
+;
+; Une las filas con terminación "str" de un directorio
+; ;
+;
+; Al ser de tipo "batch" aunque sigue siendo una función, algunos parámetros se introducirán
+; internamente (en el código) por defecto. (como por ejemplo el directorio de partida
+;
+;
+;-----------------------------------------------------------------------------
+
+str_disk = 'e:' ;'f:'
+
+path_files_results  = str_disk + '\micro\results\'
+
+IF N_ELEMENTS(str) EQ 0 THEN str_endfile = 'iS.txt' ELSE str_endfile = str
+
+IF N_ELEMENTS(culture) EQ 0 THEN BEGIN
+	culture = '21_09_01'
+	pathadd_directory    = culture + '\'  ; 13_10_01\ ; 27_09_01
+ENDIF ELSE BEGIN
+	IF STRPOS(culture, '\') EQ -1 THEN $
+		pathadd_directory    = culture +'\' $
+	ELSE pathadd_directory   = culture
+ENDELSE
+
+pathadd_session      = ''
+path_results  = path_files_results  + pathadd_directory + pathadd_session
+
+pathw_results = STRMID(path_results, 0, STRLEN(path_results)-1)
+
+IF FILE_TEST(pathw_results, /DIRECTORY) EQ 0 THEN BEGIN
+	PRINT, 'Directorio no válido'
+	RETURN, -1
+ENDIF
+
+;str_endfile = str
+
+
+; Busca todas las filas de texto del directorio coincidentes con str
+;-------------------------------------------------------------------------------
+
+str_outputfile = path_files_results + 'Tabfile_' + culture + '_' + str_endfile
+
+strarr_files = FINDFILE(path_results + '*' + str_endfile, COUNT=n_files)
+IF n_files EQ 0 THEN BEGIN
+	PRINT, 'No existe ningún archivo que concuerde'
+	RETURN, -1
+ENDIF
+strarr_files = STRLOWCASE(strarr_files)
+pos_order = SORT(strarr_files)
+strarr_files = strarr_files[pos_order]
+
+;--------------------------------------------------------------------
+; Ahora abre todos los archivos secuencialmente y los pone en el de
+; salida. fila a fila
+
+
+OPENW, unit, str_outputfile, /GET_LUN
+
+FOR i=0L, n_files-1 DO BEGIN
+	strarr_1 = read_archive(strarr_files[i])
+	n_lines = N_ELEMENTS(strarr_1)
+	FOR j=0L, n_lines-1 DO BEGIN
+		IF strarr_1[j] NE '' THEN $
+			PRINTF, unit, strarr_1[j]
+	ENDFOR
+ENDFOR
+
+CLOSE, unit
+FREE_LUN, unit
+;--------------------------------------------------------------------
+
+RETURN, 1
+
+
+END
+
+
+
+
+
+
+
+
+
+
+
+
+FUNCTION fbatch_jointtabfiles_2, NUMBER=number, REVERSE=reverse, STR=str, HEAD=head, $
+								ELIM_BAD=elim_bad
+
+; ok =  fbatch_jointtabfiles_2(NUMBER=10, REVERSE=0, STR='iSA.txt')
+;
+; Esta función es de gestión de archivos de texto
+;
+; Une las filas con terminación "str" del directorio principal de resultados
+; La opción HEAD quita la primera linea de todos los archivos menos el primero
+; La opción NUMBER solamente procesa como máximo ese número de archivos, en orden alfabético
+; empezando desde el final si la keyword REVERSE está habilitada
+;
+; lña opción ELIM_BAD elimina las lineas que contengan 'NaN'
+;
+; Al ser de tipo "batch" aunque sigue siendo una función, algunos parámetros se introducirán
+; internamente (en el código) por defecto. (como por ejemplo el directorio de partida
+;
+;
+;-----------------------------------------------------------------------------
+
+IF KEYWORD_SET(reverse)   THEN opt_reverse = 1 ELSE opt_reverse = 0
+IF KEYWORD_SET(head)      THEN opt_head    = 1 ELSE opt_head    = 0
+IF KEYWORD_SET(elim_bad)  THEN opt_elimbad = 1 ELSE opt_elimbad = 0
+IF N_ELEMENTS(str) EQ 0   THEN str_endfile = 'iS.txt' ELSE str_endfile = str
+IF N_ELEMENTS(number) EQ 0 THEN numbers = 0 ELSE numbers = FIX(number)
+
+str_disk = 'e:' ;'d:'
+
+path_files_results  = str_disk + '\micro\results\'
+
+pathadd_directory = ''
+pathadd_session   = ''
+path_results  = path_files_results  + pathadd_directory + pathadd_session
+
+pathw_results = STRMID(path_results, 0, STRLEN(path_results)-1)
+
+IF FILE_TEST(pathw_results, /DIRECTORY) EQ 0 THEN BEGIN
+	PRINT, 'Directorio no válido'
+	RETURN, -1
+ENDIF
+
+str_numbers = 'x'+STRTRIM(STRING(numbers),2)
+
+; Busca todas las filas de texto del directorio coincidentes con str
+;-------------------------------------------------------------------------------
+
+str_outputfile = path_files_results + 'files_tab\'+ 'Tabfile_' + 'all_' +str_numbers+ '_' + str_endfile
+
+strarr_files = FINDFILE(path_results + '*' + str_endfile, COUNT=n_files)
+IF n_files EQ 0 THEN BEGIN
+	PRINT, 'No existe ningún archivo que concuerde'
+	RETURN, -1
+ENDIF
+strarr_files = STRLOWCASE(strarr_files)
+pos_order = SORT(strarr_files)
+strarr_files = strarr_files[pos_order]
+
+IF numbers NE 0 THEN BEGIN	; no se procesan todos
+	IF numbers LT n_files THEN BEGIN
+		IF opt_reverse EQ 0 THEN BEGIN
+			strarr_files = strarr_files[0:numbers-1]
+		ENDIF
+		IF opt_reverse EQ 1 THEN BEGIN
+			strarr_files = strarr_files[n_files-numbers:n_files-1]
+		ENDIF
+		n_files = N_ELEMENTS(strarr_files)
+	ENDIF
+ENDIF
+
+;--------------------------------------------------------------------
+; Ahora abre todos los archivos secuencialmente y los pone en el de
+; salida. fila a fila
+; Comprueba que la primera linea sea la cabecera, y la quita
+
+j_begin = 0L
+
+OPENW, unit, str_outputfile, /GET_LUN
+
+IF opt_elimbad EQ 0 THEN BEGIN
+	FOR i=0L, n_files-1 DO BEGIN
+		strarr_1 = read_archive(strarr_files[i])
+		IF opt_head EQ 1 THEN BEGIN	; Hay que quitar la primera fila
+			IF (i NE 0) THEN j_begin = 1L ELSE j_begin = 0L
+		ENDIF
+		n_lines = N_ELEMENTS(strarr_1)
+		IF n_lines-1 GE j_begin THEN BEGIN
+			FOR j=j_begin, n_lines-1 DO BEGIN
+				IF strarr_1[j] NE '' THEN $
+					PRINTF, unit, 'c'+ strarr_1[j]
+			ENDFOR
+		ENDIF
+	ENDFOR
+ENDIF
+
+IF opt_elimbad EQ 1 THEN BEGIN	;eliminando malas filas
+	FOR i=0L, n_files-1 DO BEGIN
+		strarr_1 = read_archive(strarr_files[i])
+		IF opt_head EQ 1 THEN BEGIN	; Hay que quitar la primera fila
+			IF (i NE 0) THEN j_begin = 1L ELSE j_begin = 0L
+		ENDIF
+		n_lines = N_ELEMENTS(strarr_1)
+		IF n_lines-1 GE j_begin THEN BEGIN
+			FOR j=j_begin, n_lines-1 DO BEGIN
+				IF strarr_1[j] NE '' THEN BEGIN
+					pos = STRPOS(strarr_1[j], 'NaN')
+					IF pos EQ -1 THEN $
+						PRINTF, unit, 'c'+ strarr_1[j]
+				ENDIF
+			ENDFOR
+		ENDIF
+	ENDFOR
+ENDIF
+
+CLOSE, unit
+FREE_LUN, unit
+;--------------------------------------------------------------------
+
+RETURN, 1
+
+
+END
+
+
+
+
+
+
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; FUNCTION GetConnected, Imag, Conectividad=Conectividad, NumObj=NumObj
+;
+; PROGRAMADO POR:		José Ignacio Roldán Lozón
+; ULT. MODIFICACION:	25/03/98
+; VERSION IDL:			5.02
+; PROPOSITO:			Distingue los diversos objetos de una imagen binaria
+; PARAMETROS:			Imag -> Imagen binaria original
+;						Conectividad -> 4 u 8. Por defecto = 8.
+;						NumObj -> Devuelve en esta vble el nº de objetos identificados
+;						RETURN -> Imagen en los bits de cada objeto separado tiene el valor
+;							distinto: 0 = Fondo, Objetos = 1..NumObj
+; ALGORITMO:			Rosenfeld y Pfaltz(1966)
+; BIBLIOGRAFIA:			Robert M. HARALICK, Linda G. SHAPIRO
+;						"Computer and Robot Vision. Volume I"
+;						Addison Wesley Publishing Company 1992. Pags 33-37
+; COMENTARIOS:			Resulta Lento.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+FUNCTION GetConnected, Imag, Conectividad=Conectividad, NumObj=NumObj
+
+	; Compruebo Parámetros Externos
+	i_Bin = (Imag GE 1)	; Me aseguro de que la imagen sea binaria
+
+	IF (KEYWORD_SET(Conectividad) EQ 0) THEN BEGIN
+	   		Conectividad = 8
+	ENDIF
+
+	; Obtengo dimensiones de la imagen
+	S = SIZE(i_Bin)
+	Width = S[1]+2	; +2 para recuadro externo a cero
+	Height = S[2]+2
+
+	; Inicializo tabla de equivalencias:
+	EqTable = INTARR(1,2)
+
+	; Inicializo Indice de Labels
+	Indice = 1
+
+	; Inicializo Labels
+	i_Labels = REPLICATE(0, Width, Height)
+	i_Labels[1,1] = i_Bin
+	;Pasada 1 Arriba->Abajo:
+	Unos = WHERE(i_Labels EQ 1)
+	i_Labels = REPLICATE(0, Width, Height)
+	IF (Unos[0] EQ -1L) THEN BEGIN
+		NumObj = 0
+		return, i_Bin
+	ENDIF
+	TotalUnos = (SIZE(Unos))[1]
+	A = REPLICATE(0,3,3)
+
+Time0 = SYSTIME(1)
+	FOR P = 0L, TotalUnos-1 DO BEGIN
+		; Obtengo Label apropiado para el pixel
+		Pto = Unos[P]
+		Sup = Pto+Width
+		Inf = Pto-Width
+
+		A[1] = i_Labels[Sup]
+		A[3] = i_Labels[Pto-1]
+		A[5] = i_Labels[Pto+1]
+		A[7] = i_Labels[Inf]
+		IF Conectividad EQ 8 THEN BEGIN
+			A[0] = i_Labels[Sup-1]
+			A[2] = i_Labels[Sup+1]
+			A[6] = i_Labels[Inf-1]
+			A[8] = i_Labels[Inf+1]
+		ENDIF
+
+		NoCero = WHERE(A NE 0, Count)
+		IF (Count EQ 0) THEN BEGIN
+			M = Indice
+			Indice = Indice + 1
+		ENDIF ELSE BEGIN
+			M = MIN(A[NoCero])
+			IF (MAX(A) NE M) THEN BEGIN
+				NewEquiv = WHERE ( A GT M, Count )
+				New = REPLICATE(M,Count,2)
+				New[*,0] = A[NewEquiv]
+				EqTable = [ EqTable, New ]
+			ENDIF
+		ENDELSE
+		i_Labels[Pto] = M
+	ENDFOR
+Time1 = SYSTIME(1)
+print, '     1ª pasada de Getconnected = ', Time1-Time0
+
+
+	; Resuelve clases equivalentes
+	EqFinal = INDGEN(Indice)
+	S = SIZE(EqTable)
+	N_Equiv = S[1]
+
+	FOR i = 1, N_Equiv-1 DO BEGIN
+		EqFinal[EqTable[i,0]] = EqFinal[EqTable[i,0]] < EqTable[i,1]
+	ENDFOR
+	FOR i = 1, N_Equiv-1 DO BEGIN
+		EqFinal[EqTable[i,1]] = EqFinal[EqTable[i,1]] < EqFinal[EqTable[i,0]]
+	ENDFOR
+	FOR i = 1, Indice-1 DO BEGIN
+		EqFinal[i] = EqFinal[i] < EqFinal[EqFinal[i]]
+	ENDFOR
+	Ind = 1
+	FOR i = 1, Indice-1 DO BEGIN
+		Aux = WHERE(EqFinal EQ i, Count)
+		IF (Count NE 0) THEN BEGIN
+			EqFinal[Aux] = Ind
+			Ind = Ind + 1
+		ENDIF
+	ENDFOR
+
+
+	;Pasada 2 Arriba->Abajo:
+	FOR P = 0L, TotalUnos-1 DO BEGIN
+		i_Labels[Unos[P]] = EqFinal[i_Labels[Unos[P]]]
+	ENDFOR
+	i_Labels = i_Labels[1:Width-2,1:Height-2]	; Elimino recuadro de ceros
+
+	NumObj = Ind-1
+Time1 = SYSTIME(1)
+print, '     Fin de Getconnected = ', Time1-Time0
+
+return, i_Labels
+END
+
+FUNCTION Image_deframing2d, imag2d, thick, valor
+
+;; desemnarca una imagen de dos dimensiones por una capa de espesor de espesor variable (key thick)
+;;
+;; El marco fue puesto por Image_framing.pro
+
+IF ((SIZE(imag2d))[0] NE 2) OR ((SIZE(imag2d))[1] LT 3)  $
+    OR ((SIZE(imag2d))[2] LT 3) THEN BEGIN
+    PRINT, 'No es una imagen adecuada'
+    RETURN, 0
+ENDIF
+
+xsize = (SIZE(imag2d))[1]
+ysize = (SIZE(imag2d))[2]
+
+result  = imag2d[thick:xsize-thick-1, thick:ysize-thick-1]
+
+RETURN, result
+
+END; Desenmarca3d.pro
+FUNCTION Image_framing2d, imag2d, thick, valor
+
+;; Enmarca una imagen de dos dimensiones por una capa de espesor de espesor variable (key thick)
+;; indicado pr la key Valor
+;;
+
+tam = SIZE(imag2d)
+
+CASE (SIZE(imag2d))[0] OF; Las dimensiones de la imagen original
+
+    0: BEGIN    ; Un punto
+        xsize = 1
+        ysize = 1
+    END
+
+    1: BEGIN    ; Una fila
+        xsize = (SIZE(imag2d))[1]
+        ysize = 1
+    END
+
+    2: BEGIN    ; Una Matriz
+         xsize = (SIZE(imag2d))[1]
+         ysize = (SIZE(imag2d))[2]
+    END
+
+ENDCASE
+
+IF N_ELEMENTS(valor) NE 1 THEN value = 0 ELSE value = valor
+
+thick2 = thick*2
+
+im  = INTARR(xsize+thick2,ysize+thick2)+value
+
+im[thick:xsize+thick-1,thick:ysize+thick-1] = imag2d
+
+
+RETURN, im
+
+END ; Enmarca2d
+
+FUNCTION Immarked_elim, im_marked, min_tam, EQUAL=equal, LIMIT255=limit255, BORDERS=borders
+
+; Esta función trabaja con imágenes marcadas "label_region"
+; Elimina las regiones que son menores de un cierto umbral ,
+; Además, con la keword "equal" vuelve a marcar bien la imagen
+;
+; Además, con LIMIT255, deja solamente las primeras 255 marcas
+; Admás, con BORDERS, elimina las regiones marcadas que toquen el borde o estén a un píxel
+;
+; im_sal = immarked_elim(im_ent, 10, /EQUAL)
+;----------------------------------------------------------------------------------------
+
+T = SYSTIME(1)
+IF KEYWORD_SET(limit255) THEN opt_limit1  = 1 ELSE opt_limit1  = 0
+IF KEYWORD_SET(equal)    THEN opt_equal   = 1 ELSE opt_equal   = 0
+IF KEYWORD_SET(borders)  THEN opt_borders = 1 ELSE opt_borders = 0
+
+;----------------------------------------------------------
+
+im_sal = im_marked
+flag_change = 0
+
+max_val = MAX(im_marked)
+
+IF max_val LE 0 THEN RETURN, im_marked
+
+;ptr_arr = PTRARR(max_val, /ALLOCATE_HEAP)
+
+FOR i=1, max_val DO BEGIN
+	pos_pixel = WHERE(im_marked EQ i)
+	IF pos_pixel[0] NE -1 THEN BEGIN
+		n_pixel = N_ELEMENTS(pos_pixel)
+		IF n_pixel LT min_tam THEN BEGIN
+			im_sal[pos_pixel] = 0
+			flag_change = 1
+		ENDIF
+	ENDIF
+ENDFOR
+
+IF opt_equal EQ 1 THEN BEGIN	; ecualiza imag
+	IF flag_change EQ 1 THEN BEGIN
+		im_sal = im_sal NE 0
+		im_sal = marcaminimos_c(im_sal)
+	ENDIF
+ENDIF
+
+IF opt_borders EQ 1 THEN BEGIN	; Elimina regiones que tocan borde
+	tam    = SIZE(im_sal)
+	xsize = tam[1]
+	ysize = tam[2]
+	arr_border1 = [REFORM(im_sal[0:xsize-1, 0]),  REFORM(im_sal[0:xsize-1, ysize-1]), $
+				  REFORM(im_sal[0, 0:ysize-1]),  REFORM(im_sal[xsize-1, 0:ysize-1])]
+	arr_border2 = [REFORM(im_sal[1:xsize-2, 1]),  REFORM(im_sal[1:xsize-2, ysize-2]), $
+				  REFORM(im_sal[1, 1:ysize-2]),  REFORM(im_sal[xsize-2, 1:ysize-2])]
+	arr_border = arr_border1 + arr_border2
+
+	histo_border = HISTOGRAM(arr_border, MIN=0)
+	mark_border  = WHERE(histo_border GT 0,count)
+	changes = 0
+	FOR i=0L, N_ELEMENTS(mark_border)-1 DO BEGIN
+		IF mark_border[i] NE 0 THEN BEGIN
+			im_sal[WHERE(im_sal EQ mark_border[i])] = 0
+			changes = changes +1
+		ENDIF
+	ENDFOR
+	IF changes GT 0 THEN BEGIN
+		im_sal = im_sal NE 0
+		im_sal = marcaminimos_c(im_sal)
+	ENDIF
+ENDIF
+
+IF opt_limit1 EQ 1 THEN BEGIN
+	arr_plus255 = WHERE(im_sal GT 255, count)
+	IF count GT 0 THEN BEGIN
+		im_sal[arr_plus255] = 0
+	ENDIF
+ENDIF
+
+;----------------------------------------------------------
+
+PRINT, 'Tiempo de eliminación de regiones pequeñas  :',  SYSTIME(1)-T
+
+RETURN, im_sal
+
+END
+
+
+
+
+
+
+
+
+
+
+
+ FUNCTION Process_SPSS_array, strarr_in, SEPARATE=separate, NORMALIZE=normalize, $
+ 								COMMAS = commas, CLASSES=classes
+
+;---------------------------------------------------------------------------------------
+; Función de procesado de un array de strings en formato tabuladores
+;
+; La estructura es de columna, El primer elemento tiene los nombres de las variables
+; Los demás elementos son los que hay que procesar
+;
+; opciones:
+;
+; SEPARATE   - solamente separa el array en una matriz de variables,
+; NORMALIZE  - Normaliza las variables en flotante entre 0 y 1
+; CLASSES    - Borra las filas que no son de clase 0 o 1 (la variable nº4)
+; COMMAS     - Cambia puntos por comas (para compatibilidad con SPSS)
+;
+;---------------------------------------------------------------------------------------
+
+T = SYSTIME(1)
+
+IF KEYWORD_SET(separate)  THEN opt_separate  = 1 ELSE opt_separate = 0
+IF KEYWORD_SET(normalize) THEN opt_normalize = 1 ELSE opt_normalize= 0
+IF KEYWORD_SET(commas)    THEN opt_commas    = 1 ELSE opt_commas   = 0
+IF KEYWORD_SET(classes)   THEN opt_classes   = 1 ELSE opt_classes  = 0
+
+
+;---------------------------------------------------------------------------------------
+
+strarr_file = ''
+str_line    = ''
+str_tab     =  STRING(9B)
+i = 0
+
+n_files = N_ELEMENTS(strarr_in)
+
+str_names    = strarr_in[0]
+strarr_files = strarr_in[1:n_files-1]
+
+n_files = n_files - 1
+
+strarr_prueba = STRSPLIT(str_names, str_tab, /EXTRACT)
+n_vars = N_ELEMENTS(strarr_prueba) ; Número de variables
+
+strmat_vars = STRARR(n_vars, n_files)
+
+;------------------------------------------------------------
+FOR i=0L, n_files-1 DO BEGIN
+
+	strarr_vars = STRSPLIT(strarr_files[i], str_tab, /EXTRACT)
+	IF N_ELEMENTS(strarr_vars) NE n_vars THEN BEGIN
+		PRINT, 'Formato de archivo inválido, distinto número de variables por fila'
+		RETURN, -3
+	ENDIF
+	strmat_vars[*,i] = strarr_vars
+ENDFOR
+;------------------------------------------------------------
+
+IF opt_separate EQ 1 THEN BEGIN
+	PRINT, 'Tiempo de lectura y proceso de archivo  :', SYSTIME(1) - T
+	RETURN, strmat_vars
+ENDIF
+
+;------------------------------------------------------------
+first_var = 4 ; La primera variable a normalizar está en la columna 4
+
+IF opt_normalize EQ 1 THEN BEGIN
+	FOR i=first_var, n_vars-1 DO BEGIN
+		array_var = FLOAT(strmat_vars[i, *])
+		array_varnor = var_normalize_2(array_var)
+		strmat_vars[i, *] = STRTRIM(STRING(array_varnor, FORMAT ='(F33.8)'), 2)
+	ENDFOR
+ENDIF
+
+IF (opt_commas EQ 0) AND (opt_classes EQ 0) THEN BEGIN
+	strarr_out = STRARR(1, n_files)
+	FOR i=0L, n_files-1 DO BEGIN
+		str_file = strmat_vars[0,i]
+		FOR j=1L, n_vars-1 DO BEGIN
+			str_file = str_file + str_tab + strmat_vars[j,i]
+		ENDFOR
+		strarr_out[i] = str_file
+	ENDFOR
+ENDIF
+
+
+IF (opt_commas EQ 1) OR (opt_classes EQ 1) THEN BEGIN
+	strarr_out = ''
+	FOR i=0L, n_files-1 DO BEGIN
+		IF FIX(strmat_vars[3,i]) LE 1 THEN BEGIN
+			str_file = strmat_vars[0,i]
+			FOR j=1L, n_vars-1 DO BEGIN
+				str_file = str_file + str_tab + strmat_vars[j,i]
+			ENDFOR
+			strarr_out = [[strarr_out], [str_file]]
+		ENDIF
+	ENDFOR
+	n_files = N_ELEMENTS(strarr_out)
+	strarr_out = strarr_out[1:n_files-1]
+	n_files = n_files-1
+	strarr_out = REFORM(strarr_out,1, n_files)
+
+ENDIF
+
+strarr_out = [[str_names], [strarr_out]]
+PRINT, 'Tiempo de proceso de archivo  :', SYSTIME(1) - T
+RETURN, strarr_out
+
+END
+
+
+
+
+ FUNCTION Read_archive, file
+
+;---------------------------------------------------------------------------------------
+; Función de lectura de un fichero ASCII en un array de strings
+; Cada fila acabada en un RETURN es una celda del array de salida
+;
+;
+; file = 'e:\micro\results\21_09_01\image2_IDL_spss_iSA.txt'
+; file = 'f:\micro\results\124042\image05_IDL_spss_iSA.txt'
+; file = 'f:\micro\results\files_tab\Tabfile_all_x100_iSA.txt'
+; r = read_archive(file)
+;---------------------------------------------------------------------------------------
+
+
+IF NOT FILE_TEST(file) THEN BEGIN
+	PRINT, ' Archivo inexistente'
+	RETURN, ''
+ENDIF
+
+strarr_file = ''
+str_line = ''
+i = 0
+
+T = SYSTIME(1)
+
+;------------------------------------------------------------
+OPENR, unit, file, /GET_LUN
+
+file_info = FSTAT(unit)
+
+IF file_info.size EQ 0 THEN BEGIN
+	PRINT, ' Archivo vacío'
+	CLOSE,    unit
+	FREE_LUN, unit
+	RETURN, ''
+ENDIF
+
+
+WHILE NOT EOF(unit) DO BEGIN
+    READF, unit, str_line
+    strarr_file[i] = str_line
+    strarr_file    = [[strarr_file],['']]
+    i=i+1
+ENDWHILE
+
+CLOSE,    unit
+FREE_LUN, unit
+;------------------------------------------------------------
+
+IF i LE 0 THEN BEGIN
+	PRINT, 'Archivo vacío'
+	RETURN, ''
+ENDIF
+;------------------------------------------------------------
+
+strarr_file = strarr_file[*, 0:i-1]
+
+
+PRINT, 'Tiempo de lectura y proceso de archivo  :', SYSTIME(1) - T
+
+
+RETURN, strarr_file
+
+END
+
+
+
+
+ FUNCTION Read_SPSS_archive, file, NAMES=names
+
+;---------------------------------------------------------------------------------------
+; Función de lectura de un fichero de datos tipo tabulador. Almacena la salida en una
+; estructura con:
+; Array de strings con los nombres de las variables, si NAMES está habilitada
+; o Bien:
+; Matriz de strings con los valores (posteriormente habría que distinguir cuales son
+; variables string o numéricas
+;
+;
+; file = 'e:\micro\results\images_positive\21_09_01\image2_IDL_spss_iSA.txt'
+; r = read_spss_archive_2(file)
+;---------------------------------------------------------------------------------------
+
+IF KEYWORD_SET(names) THEN opt_names = 1 ELSE opt_names = 0
+
+IF NOT FILE_TEST(file) THEN BEGIN
+	PRINT, ' Archivo inexistente'
+	RETURN, -1
+ENDIF
+
+strarr_file = ''
+str_line = ''
+str_tab =  STRING(9B)
+i = 0
+
+T = SYSTIME(1)
+
+;------------------------------------------------------------
+OPENR, unit, file, /GET_LUN
+
+IF opt_names EQ 1 THEN BEGIN	; solamente lee la primera fila
+	READF, unit, str_line
+	strarr_file[i] = str_line
+    strarr_file    = [[strarr_file],['']]
+    i=i+1
+ENDIF
+
+IF opt_names EQ 0 THEN BEGIN
+	WHILE NOT EOF(unit) DO BEGIN
+	    READF, unit, str_line
+	    strarr_file[i] = str_line
+	    strarr_file    = [[strarr_file],['']]
+	    i=i+1
+	ENDWHILE
+ENDIF
+
+CLOSE,    unit
+FREE_LUN, unit
+;------------------------------------------------------------
+
+IF i LE 0 THEN BEGIN
+	PRINT, 'No existen variables que leer'
+	RETURN, -2
+ENDIF
+;------------------------------------------------------------
+
+strarr_file = strarr_file[*, 0:i-1]
+n_files = N_ELEMENTS(strarr_file)
+
+strarr_vars = STRSPLIT(str_line, str_tab, /EXTRACT)
+n_vars = N_ELEMENTS(strarr_vars) ; Número de variables
+
+
+strmat_vars = STRARR(n_vars, n_files)
+
+;------------------------------------------------------------
+FOR j=0, n_files -1 DO BEGIN
+
+	strarr_vars = STRSPLIT(strarr_file[j], str_tab, /EXTRACT)
+	IF N_ELEMENTS(strarr_vars) NE n_vars THEN BEGIN
+		PRINT, 'Formato de archivo inválido, distinto número de variables por fila'
+		RETURN, -3
+	ENDIF
+	strmat_vars[*,j] = strarr_vars
+ENDFOR
+;------------------------------------------------------------
+
+PRINT, 'Tiempo de lectura y proceso de archivo  :', SYSTIME(1) - T
+
+
+RETURN, strmat_vars
+
+END
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; FUNCTION Reconstruction, i_Mayor, i_Menor, Estructura=Estructura
+;
+; PROGRAMADO POR:		José Ignacio Roldán Lozón
+; ULT. MODIFICACION:	28/11/97
+; VERSION IDL:			5.02
+; PROPOSITO:			Realiza la reconstrucción morfológica de la imagen mayor a partir
+;							de la imagen menor.
+; PARAMETROS:			i_Mayor -> Imagen mayor
+;						i_Menor -> Imagen menor
+;						Estructura -> Estructura para realizar las aperturas y cierres en
+;							niveles de gris. Por defecto = matriz cuadrada 3x3
+; ALGORITMO:
+; BIBLIOGRAFIA:			Luc VINCENT, Edward R. DOUGHERTY
+;						"Morphological Segmentation for Textures and Particles"
+;						Recopilado en "Digital Image Processing Methods"
+;						Ed: ??
+;						Pags: 60..102
+;						Biblioteca ETSI Telecomunicacion: L4n/Dig
+; COMENTARIOS:			Resulta Lenta. Debería hacerla en C y llamarla con CALLEXTERN
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+FUNCTION Reconstruction, i_Mayor, i_Menor, Estructura=Estructura
+
+	PRINT, 'Reconstruction.c     ' & T = SYSTIME(1)
+
+    IF (MIN(i_Mayor-i_Menor) LT 0) THEN BEGIN
+		return, 0*i_Menor
+	ENDIF
+	IF (N_ELEMENTS(Estructura) EQ 0) THEN BEGIN
+		Estructura = REPLICATE(1,3,3)
+	ENDIF
+	IF ((SIZE(i_Mayor))[0] EQ 1) THEN BEGIN
+		Estructura = Estructura[0:2]
+	ENDIF
+
+	i_Aux = i_Menor
+	i_Rec = i_Mayor < DILATE(i_Aux, Estructura, /GRAY)
+	WHILE (MAX(i_Rec GT i_Aux) GT 0) DO BEGIN
+		i_Aux = i_Rec
+		i_Rec = i_Mayor < DILATE(i_Aux, Estructura, /GRAY)
+	ENDWHILE
+
+	PRINT, 'reconstruction.c     ',  SYSTIME(1) - T, ' Seg'
+
+return, i_Rec;
+END
+
+FUNCTION Segment_marked, im_orig, im_marked
+
+; Separa en la imagen de salida los cuadrados (que marca a 1) y los circulos (que marca a dos)
+; De la imagen marcada por el usuario
+;
+; La imagen de entrada es la marcada original
+;----------------------------------------------------------------------------------------
+
+
+
+xsize = (SIZE(im_orig))[2]
+ysize = (SIZE(im_orig))[3]
+
+im_recs = INTARR(xsize, ysize)
+im_circl= INTARR(xsize, ysize)
+im_sal  = INTARR(xsize, ysize)
+
+im_recs = FIX(im_marked[0,*,*]) +  im_marked[1,*,*] +  im_marked[2,*,*]
+im_recs = im_recs GT 750
+
+im_circl= (im_marked[1,*,*] LT 40 ) AND (im_marked[0,*,*] GT 200)
+
+im_sal[WHERE(im_recs  EQ 1)] = 1
+im_sal[WHERE(im_circl EQ 1)] = 2
+
+RETURN, im_sal
+
+END
+
+
+
+
+
+
+
+
+
+
+
+ FUNCTION var_normalize, arr_data
+
+;---------------------------------------------------------------------------------------
+; Normaliza un array de datos de entrada entre 0 y 1
+;
+;
+;---------------------------------------------------------------------------------------
+
+n_data = N_ELEMENTS(arr_data)
+
+arr_in  = FLOAT(arr_data)
+max_data = MAX(arr_in)
+min_data = MIN(arr_in)
+
+IF max_data EQ min_data THEN BEGIN
+	arr_out = arr_in*0 + 1
+	RETURN, arr_out
+ENDIF
+
+arr_out = (arr_in - min_data)/(max_data-min_data)
+
+RETURN, arr_out
+
+
+;------------------------------------------------------------
+
+
+
+
+
+END
+
+
+
+
+ FUNCTION var_normalize_2, arr_data
+
+;---------------------------------------------------------------------------------------
+; Normaliza un array de datos de entrada a variables de media 0 y varianza 1
+; (x - mean(x))/var(x)
+;
+;
+;---------------------------------------------------------------------------------------
+
+n_data = N_ELEMENTS(arr_data)
+
+arr_in  = FLOAT(arr_data)
+
+media = MEAN(arr_in)
+var   = varianza(arr_in)
+
+arr_out = (arr_in - media)/var
+
+RETURN, arr_out
+
+
+;------------------------------------------------------------
+
+
+
+
+
+END
+
+
+
+
+ FUNCTION var_normalize_3, arr_data
+
+;---------------------------------------------------------------------------------------
+; Normaliza un array de datos de entrada entre 0 y 10
+;
+;
+;---------------------------------------------------------------------------------------
+
+n_data = N_ELEMENTS(arr_data)
+
+arr_in   = FLOAT(arr_data)
+max_data = MAX(arr_in)
+min_data = MIN(arr_in)
+
+IF max_data EQ min_data THEN BEGIN
+	arr_out = arr_in*0
+	RETURN, arr_out
+ENDIF
+
+arr_out = ((arr_in - min_data)/(max_data-min_data))*10.0
+
+RETURN, arr_out
+
+
+;------------------------------------------------------------
+
+
+
+
+
+END
+
+
+
+FUNCTION view_bacile_disk, n_imag, n_reg, CULTURE=culture, MARKED=marked, $
+	RET=ret
+
+;---------------------------------------------------------------------------------------
+; Función diseñada para visualizar en pantalla un bacilo segmentado y guardado en disco
+; Necesita saber el identificador de cultura, el número de imagen y el identificador de
+; bacilo
+;
+; im1 = view_bacile_disk(3,23, CULTURE='21_09_01', /MARKED, /RET)
+; im2 = baciles_detect_p1(im1)
+;---------------------------------------------------------------------------------------
+
+
+str_disk = 'e:'
+
+path_images_original = str_disk + '\micro\images\'
+path_images_results  = str_disk + '\micro\results\'
+
+IF N_ELEMENTS(culture) EQ 0 THEN BEGIN
+	culture = '21_09_01'
+	pathadd_directory    = culture + '\'  ; 13_10_01\ ; 27_09_01
+ENDIF ELSE BEGIN
+	IF STRPOS(culture, '\') EQ -1 THEN $
+		pathadd_directory    = culture +'\' $
+	ELSE pathadd_directory   = culture
+ENDELSE
+
+;pathadd_session      = 'Prueba_1\'
+pathadd_session      = ''
+
+path_results  = path_images_results  + pathadd_directory + pathadd_session
+path_original = path_images_original + pathadd_directory
+
+
+IF KEYWORD_SET(marked) THEN BEGIN
+	file_imag_orig = 'image'+STRTRIM(STRING(n_imag),2)+'mar.tif'
+ENDIF ELSE BEGIN
+	file_imag_orig = 'image'+STRTRIM(STRING(n_imag),2)+'.tif'
+ENDELSE
+file_imag_mask = 	 'image'+STRTRIM(STRING(n_imag),2)+'_mask1.tif'
+
+im_orig = READ_TIFF(path_original + file_imag_orig, ORDER=order1)
+im_mask = READ_TIFF(path_results  + file_imag_mask, ORDER=order2)
+
+PRINT, order1
+PRINT, order2
+
+;-----------------------------------------------------------------------------
+tam = SIZE(im_mask)
+xsize = tam[1]
+ysize = tam[2]
+;-----------------------------------------------------------------------------
+pos_pixels = WHERE(im_mask EQ n_reg)
+pos_pix    = pos_pixels[0]
+
+pos_pix_xy = INTARR(2)
+pos_pix_xy[0] = pos_pix MOD xsize
+pos_pix_xy[1] = pos_pix / xsize
+
+box_xmax = pos_pix_xy[0]+128 < (xsize-1)
+box_xmin = pos_pix_xy[0]-128 > 0
+box_ymax = pos_pix_xy[1]+128 < (ysize-1)
+box_ymin = pos_pix_xy[1]-128 > 0
+
+im_mask_frag = im_mask[box_xmin:box_xmax, box_ymin:box_ymax] EQ n_reg
+im_orig_frag = im_orig[*, box_xmin:box_xmax, box_ymin:box_ymax]
+
+im_frontier = binreg_frontier(im_mask_frag)
+
+;im_superposition1 = superpone_mask(im_orig_frag, im_mask_frag, COLOR1=[0,0,255], LEVEL=0.5)
+im_superposition2 = superpone_mask(im_orig_frag, im_frontier,  COLOR1=[0,0,255], LEVEL=1)
+
+WINDOW,0, XSIZE = 257S*3, YSIZE = 257
+
+TVSCL, im_orig_frag, 0, TRUE=1, ORDER=order1
+TVSCL, im_mask_frag, 1, ORDER=order2
+TVSCL, im_superposition2, 2, TRUE=3, ORDER=order1
+;TVSCL, im_superposition1, 3, TRUE=3, ORDER=order1
+
+PRINT, 'Número de píxeles: ' , N_ELEMENTS(WHERE(im_mask_frag EQ 1))
+
+IF KEYWORD_SET(ret) EQ 1 THEN BEGIN
+	RETURN, im_mask_frag
+ENDIF ELSE BEGIN
+	RETURN, 1
+ENDELSE
+
+END
+FUNCTION view_bacile_memory, im_orig, im_mask, n_reg
+
+;---------------------------------------------------------------------------------------
+; Función diseñada para visualizar en pantalla un bacilo segmentado y guardado en disco
+; Necesita saber el identificador de cultura, el número de imagen y el identificador de
+; bacilo
+;
+; im1 = view_bacile_memory(image_original, image_mask, 23)
+;
+;
+;---------------------------------------------------------------------------------------
+
+
+;-----------------------------------------------------------------------------
+tam = SIZE(im_mask)
+xsize = tam[1]
+ysize = tam[2]
+;-----------------------------------------------------------------------------
+pos_pixels = WHERE(im_mask EQ n_reg)
+pos_pix    = pos_pixels[0]
+
+pos_pix_xy = INTARR(2)
+pos_pix_xy[0] = pos_pix MOD xsize
+pos_pix_xy[1] = pos_pix / xsize
+
+box_xmax = pos_pix_xy[0]+128 < (xsize-1)
+box_xmin = pos_pix_xy[0]-128 > 0
+box_ymax = pos_pix_xy[1]+128 < (ysize-1)
+box_ymin = pos_pix_xy[1]-128 > 0
+
+im_mask_frag = im_mask[box_xmin:box_xmax, box_ymin:box_ymax] EQ n_reg
+im_orig_frag = im_orig[*, box_xmin:box_xmax, box_ymin:box_ymax]
+
+im_frontier = binreg_frontier(im_mask_frag)
+
+;im_superposition1 = superpone_mask(im_orig_frag, im_mask_frag, COLOR1=[0,0,255], LEVEL=0.5)
+im_superposition2 = superpone_mask(im_orig_frag, im_frontier,  COLOR1=[0,0,255], LEVEL=1)
+
+WINDOW,0, XSIZE = 257S*3, YSIZE = 257
+
+TVSCL, im_orig_frag, 0, TRUE=1
+TVSCL, im_mask_frag, 1
+TVSCL, im_superposition2, 2, TRUE=3
+;TVSCL, im_superposition1, 3, TRUE=3, ORDER=order1
+
+RETURN, 1
+
+
+END
+FUNCTION view_microimage, n_imag, CULTURE=culture, MASK=mask, $
+	MARKED=marked, ORIG=orig, RET=ret
+
+;---------------------------------------------------------------------------------------
+; Función diseñada para visualizar en pantalla una imagen de microscopia guardada en disco
+; Necesita saber el identificador de cultura, y el número de imagen
+;
+; ok = view_microimage( 3, CULTURE='21_09_01', /MASK, /RET)
+;---------------------------------------------------------------------------------------
+
+
+str_disk = 'e:'
+
+path_images_original = str_disk + '\micro\images\'
+path_images_results  = str_disk + '\micro\results\'
+
+IF N_ELEMENTS(culture) EQ 0 THEN BEGIN
+	culture = '21_09_01'
+	pathadd_directory    = culture + '\'  ; 13_10_01\ ; 27_09_01
+ENDIF ELSE BEGIN
+	IF STRPOS(culture, '\') EQ -1 THEN $
+		pathadd_directory    = culture +'\' $
+	ELSE pathadd_directory   = culture
+ENDELSE
+
+;pathadd_session      = 'Prueba_1\'
+pathadd_session      = ''
+
+IF NOT KEYWORD_SET(mask)   THEN opt_mask   = 0 ELSE opt_mask   = 1
+IF NOT KEYWORD_SET(marked) THEN opt_marked = 0 ELSE opt_marked = 1
+IF NOT KEYWORD_SET(orig)   THEN opt_orig   = 0 ELSE opt_orig   = 1
+
+path_results  = path_images_results  + pathadd_directory + pathadd_session
+path_original = path_images_original + pathadd_directory
+path_marked   = path_images_original + pathadd_directory
+
+file_imag_orig   = 'image'+STRTRIM(STRING(n_imag),2)+'.tif'
+file_imag_mask   = 'image'+STRTRIM(STRING(n_imag),2)+'_mask1.tif'
+file_imag_marked = 'image'+STRTRIM(STRING(n_imag),2)+'mar.tif'
+
+IF opt_mask THEN BEGIN
+	im_mask   = READ_TIFF(path_results  + file_imag_mask,  ORDER=order)
+	!ORDER=order
+	viewg, im_mask NE 0  ,0
+	PRINT, 'Maximo valor de la imagen segmentada: ', MAX(im_mask)
+ENDIF
+IF opt_marked THEN BEGIN
+	im_marked = READ_TIFF(path_marked   + file_imag_marked, ORDER=order)
+	!ORDER=order
+	viewg, im_marked, 1
+ENDIF
+IF opt_orig   THEN BEGIN
+	im_orig   = READ_TIFF(path_marked   + file_imag_orig, ORDER=order)
+	!ORDER=order
+	viewg, im_orig,   2
+ENDIF
+
+
+
+
+IF KEYWORD_SET(ret) EQ 1 THEN BEGIN
+	IF opt_mask   EQ 1 THEN $
+		RETURN, im_mask
+	IF opt_marked EQ 1 THEN $
+		RETURN, im_marked
+	IF opt_orig EQ 1 THEN   $
+		RETURN, im_orig
+ENDIF ELSE BEGIN
+	RETURN, 1
+ENDELSE
+
+END
+FUNCTION View_orderperimeter, image_o, BIG=big
+
+; Visualiza iterativamente los pixeles del contorno de una imagen binaria
+;
+;--------------------------------------------------------------------------------------
+
+IF KEYWORD_SET(big) THEN opt_big = 1 ELSE opt_big=0
+
+arr_ord = binreg_orderperimeter(image_o)
+
+n_perim = (SIZE(arr_ord))[2]
+
+;tam = (SIZE(image_o))[2]
+;xsize = tam[1]
+;ysize = tam[2]
+
+FOR i=0L, n_perim-1 DO BEGIN
+
+	imag_view = image_o
+	imag_view[arr_ord[2,i]]=3
+	IF opt_big EQ 1 THEN $
+		viewg, imag_view $
+	ELSE $
+		view, imag_view
+ENDFOR
+
+RETURN, 1
+
+END
+
+
+
+
+
+;------------------------------------------------------------
+;------------------------------------------------------------
+
+ FUNCTION Write_archive, file, strarr_in, NO_EMPTY=no_empty
+
+;---------------------------------------------------------------------------------------
+; Función de escritura en un archivo ascii de un array de strings
+; Cada fila acabada en un RETURN es una celda del array de salida
+;
+; NO-EMPTY - No escribe lineas vacías
+;---------------------------------------------------------------------------------------
+
+T = SYSTIME(1)
+
+IF KEYWORD_SET(no_empty) THEN opt_noempty = 1 ELSE opt_noempty = 0
+
+n_lines = N_ELEMENTS(strarr_in)
+
+;------------------------------------------------------------
+OPENW, unit, file, /GET_LUN
+
+IF opt_noempty EQ 0 THEN BEGIN
+	FOR i=0L, n_lines-1 DO BEGIN
+		PRINTF, unit, strarr_in[i]
+	ENDFOR
+ENDIF ELSE BEGIN
+	FOR i=0L, n_lines-1 DO BEGIN
+		IF strarr_in NE '' THEN $
+			PRINTF, unit, strarr_in[i]
+	ENDFOR
+ENDELSE
+
+CLOSE,    unit
+FREE_LUN, unit
+;------------------------------------------------------------
+
+
+
+PRINT, 'Tiempo de escritura de archivo  :', SYSTIME(1) - T
+
+
+RETURN, 1
+
+END
+
+
+
+
+ FUNCTION Write_SPSS_archive_2, file, image_orig, image_mask, $
+ 		IM_MARKED=im_marked, HEAD=head, $
+ 		CULTURE=culture, N_IMAGE=n_image, SIMPLE=simple, ADVANCED=advanced, MOMENTS=moments, $
+ 		FOURIER=fourier
+
+;---------------------------------------------------------------------------------------
+; Esta función escribe un archivo de texto compatible con SPSS
+; a partir de una imagen original (tres canales y true =1) y la máscara de segmentación
+
+; Necesita introducir dos arrays: la cultura y el número de imagen (para identificacion posterior)
+
+; Con la imagen IM_MARKED, además se trabaja con imágenes marcadas: que tienen la siguiente clave
+;
+; 1 - Es bacilo
+; 2 - No es bacilo
+; 3 - Dudoso
+;
+; Si se trabaja con imágenes sin marcar. la colummna de 'class' se deja a cero
+;
+; Como los parámetros de las imágenes son bastantes. Se decide crear dos archivos de tabuladores
+; Opción HEAD = escribe cabecera con nombre de funciones
+;
+; Con el keyword /SIMPLE, /ADVANCED, /MOMENTS o /FOURIER, se crean
+; distintas series de valores (se pueden sumar)
+;
+; Parámetros comunes:
+;
+; - culture  : Identificador  de cultivo (directorio)
+; - n_image  : Número de imagen
+; - class    : Clase (si la imagen está marcada) si no, cero
+; - index    : Identificador de región
+
+; Con /SIMPLE:
+;
+; - size     : Número de píxeles
+; - perim    : Perímetro
+; - mean_r   : media del canal rojo
+; - mean_g   : media del canal verde
+; - mean_b   : media del canal azul
+; - stdv_r   : desviación standard del canal rojo
+; - stdv_g   : desviación standard del canal verde
+; - stdv_b   : desviación standard del canal azul
+;
+; Con /ADVANCED:
+
+; - origin_x : El lugar X del cuadrado recto que inscribe a la imagen
+; - origin_y : El lugar Y del cuadrado recto que inscribe a la imagen
+; - cmass_x   : Centro de masas relativo en X de la máscara (se suma a origin_x)
+; - cmass_y   : Centro de masas relativo en Y de la máscara
+; - gcmass_x  : Centro de masas relativo en X (en el canal verde)
+; - gcmass_y  : Centro de masas relativo en Y (en el canal verde)
+; - longdim   : "Longest Dimension", la longitud del mayor segmento contenido en la imagen
+; - thinness  : "thinness" o delgadez mediante computo de los momentos
+; - angle     : Angulo mediante computo de los momentos
+; - ffactor   : Factor de forma, o circularidad (4*pi*A/P^2)
+; - feretd    : "Feret diameter"
+; - compact   : "compactness" dividiendo el diñametro de Feret entre el eje mayor
+; - maxr      : Radio máximo
+; - minr      : Radio mínimo
+; - maxdist   : Distancia máxima de un punto al fondo
+; - rectness  : Rectangularidad, o relación con el área del rectángulo inscrito más pequeño
+;
+; con /MOMENTS,
+;
+;  'm11'      - Momentos (i,j) (en imagen de gris del canal verde)
+;  'm20'
+;  'm02'
+;  'm21'
+;  'm12'
+;  'm30'
+;  'm03'
+;  'm22'
+;  'm31'
+;  'm13'
+;  'm40'
+;  'm04'
+;
+; Con FOURIER,
+;
+; - f_1x	; Descriptores de Fourier ( de la forma o shape)
+; - f_1y
+; - f_2x
+; - f_2y
+;---------------------------------------------------------------------------------------
+;---------------------------------------------------------------------------------------
+
+T = SYSTIME(1)
+
+IF KEYWORD_SET(head) THEN opt_head = 1 ELSE opt_head = 0
+
+IF N_ELEMENTS(im_marked) EQ 0 THEN opt_marked = 0 ELSE opt_marked = 1
+IF KEYWORD_SET(advanced) THEN opt_advanced = 1 ELSE opt_advanced = 0
+IF KEYWORD_SET(simple)   THEN opt_simple   = 1 ELSE opt_simple   = 0
+IF KEYWORD_SET(moments)  THEN opt_moments  = 1 ELSE opt_moments  = 0
+;-------------------------------------------------------------------------
+
+n_regs = MAX(image_mask)	;número de baciletes
+
+IF n_regs LE 0 THEN BEGIN
+	PRINT, 'No hay ninguna región, no se escriben datos, solamente la cabecera'
+
+	;RETURN, -1
+ENDIF
+
+tam_1 = SIZE(image_mask)
+tam_2 = SIZE(image_orig)
+
+xsize = tam_1[1]
+ysize = tam_1[2]
+
+;image_orig_r = image_orig[0,*,*]
+;image_orig_g = image_orig[1,*,*]
+;image_orig_b = image_orig[2,*,*]
+
+IF tam_2[1] EQ 3 THEN BEGIN	;true=1
+	IF MIN(tam_1[1:2] EQ tam_2[2:3]) NE 1 THEN BEGIN
+		PRINT, 'Las imagenes no son complatibles'
+		RETURN, -1
+	ENDIF
+ENDIF
+IF tam_2[1] NE 3 THEN BEGIN
+	PRINT, 'Las imagenes necesitan tener TRUE = 1'
+	RETURN, -1
+ENDIF
+
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; Comunes
+
+str_tab = STRING(9B)
+
+IF opt_head EQ 1 THEN BEGIN	; Tiene que escribir la cabecera con el nombre de variable
+
+		str_culture = 'culture'
+		str_nimage  = 'n_image'
+		str_class   = 'class'
+		str_index   = 'index'
+
+	IF opt_simple EQ 1 THEN BEGIN
+		str_size    = 'size'
+		str_peri    = 'perim'
+		str_mean_r  = 'mean_r'
+		str_mean_g  = 'mean_g'
+		str_mean_b  = 'mean_b'
+		str_stdv_r  = 'stdv_r'
+		str_stdv_g  = 'stdv_g'
+		str_stdv_b  = 'stdv_b'
+	ENDIF
+	IF opt_advanced EQ 1 THEN BEGIN
+		str_origin_x = 'origin_x'
+		str_origin_y = 'origin_y'
+		str_cmass_x  = 'cmass_x'
+		str_cmass_y  = 'cmass_y'
+		str_gcmass_x = 'gcmass_x'
+		str_gcmass_y = 'gcmass_y'
+		str_longdim  = 'longdim'
+		str_thinness = 'thinness'
+		str_angle    = 'angle'
+		str_ffactor  = 'ffactor'
+		str_feretd   = 'feretd'
+		str_compact  = 'compact'
+		str_maxr     = 'maxr'
+		str_minr     = 'minr'
+		str_maxdist  = 'maxdist'
+		str_rectness = 'rectness'
+	ENDIF
+	IF opt_moments EQ 1 THEN BEGIN
+		str_m11    = 'm11'
+		str_m20    = 'm20'
+		str_m02    = 'm02'
+		str_m21    = 'm21'
+		str_m12    = 'm12'
+		str_m30    = 'm30'
+		str_m03    = 'm03'
+		str_m22    = 'm22'
+		str_m31    = 'm31'
+		str_m13    = 'm13'
+		str_m40    = 'm40'
+		str_m04    = 'm04'
+	ENDIF
+ENDIF
+
+IF n_regs GE 1 THEN BEGIN
+
+		regs_class = INTARR(1, n_regs)
+		regs_index = INTARR(1, n_regs)
+
+	IF opt_simple EQ 1 THEN BEGIN
+		regs_size    = INTARR(1, n_regs)
+		regs_peri  	 = FLTARR(1, n_regs)
+		regs_mean_r  = FLTARR(1, n_regs)
+		regs_mean_g  = FLTARR(1, n_regs)
+		regs_mean_b  = FLTARR(1, n_regs)
+		regs_stdv_r  = FLTARR(1, n_regs)
+		regs_stdv_g  = FLTARR(1, n_regs)
+		regs_stdv_b  = FLTARR(1, n_regs)
+	ENDIF
+	IF opt_advanced EQ 1 THEN BEGIN
+		regs_origin_x  = INTARR(1, n_regs)
+		regs_origin_y  = INTARR(1, n_regs)
+		regs_cmass_x  = FLTARR(1, n_regs)
+		regs_cmass_y  = FLTARR(1, n_regs)
+		regs_gcmass_x = FLTARR(1, n_regs)
+		regs_gcmass_y = FLTARR(1, n_regs)
+		regs_longdim  = FLTARR(1, n_regs)
+		regs_thinness = FLTARR(1, n_regs)
+		regs_angle    = FLTARR(1, n_regs)
+		regs_ffactor  = FLTARR(1, n_regs)
+		regs_feretd   = FLTARR(1, n_regs)
+		regs_compact  = FLTARR(1, n_regs)
+		regs_maxr     = FLTARR(1, n_regs)
+		regs_minr     = FLTARR(1, n_regs)
+		regs_maxdist  = FLTARR(1, n_regs)
+		regs_rectness = FLTARR(1, n_regs)
+	ENDIF
+	IF opt_moments EQ 1 THEN BEGIN
+		regs_m11  = FLTARR(1, n_regs)
+		regs_m20  = FLTARR(1, n_regs)
+		regs_m02  = FLTARR(1, n_regs)
+		regs_m21  = FLTARR(1, n_regs)
+		regs_m12  = FLTARR(1, n_regs)
+		regs_m30  = FLTARR(1, n_regs)
+		regs_m03  = FLTARR(1, n_regs)
+		regs_m22  = FLTARR(1, n_regs)
+		regs_m31  = FLTARR(1, n_regs)
+		regs_m13  = FLTARR(1, n_regs)
+		regs_m40  = FLTARR(1, n_regs)
+		regs_m04  = FLTARR(1, n_regs)
+	ENDIF
+ENDIF
+
+IF opt_head EQ 1 THEN BEGIN
+
+		str_variables = $
+			str_culture + str_tab + $
+			str_nimage  + str_tab + $
+			str_index   + str_tab + $
+			str_class
+
+	IF opt_simple EQ 1 THEN BEGIN
+		str_variables = $
+			str_variables + str_tab + $
+			str_size    + str_tab + $
+			str_peri    + str_tab + $
+			str_mean_r  + str_tab + $
+			str_mean_g  + str_tab + $
+			str_mean_b  + str_tab + $
+			str_stdv_r  + str_tab + $
+			str_stdv_g  + str_tab + $
+			str_stdv_b
+	ENDIF
+	IF opt_advanced EQ 1 THEN BEGIN
+		str_variables = $
+			str_variables + str_tab + $
+			str_origin_x  + str_tab + $
+			str_origin_y  + str_tab + $
+			str_cmass_x  + str_tab + $
+			str_cmass_y  + str_tab + $
+			str_gcmass_x + str_tab + $
+			str_gcmass_y + str_tab + $
+			str_longdim  + str_tab + $
+			str_thinness + str_tab + $
+			str_angle    + str_tab + $
+			str_ffactor  + str_tab + $
+			str_feretd   + str_tab + $
+			str_compact  + str_tab + $
+			str_maxr     + str_tab + $
+			str_minr     + str_tab + $
+			str_maxdist  + str_tab + $
+			str_rectness
+	ENDIF
+	IF opt_moments EQ 1 THEN BEGIN
+		str_variables = $
+			str_variables + str_tab + $
+			str_m11  + str_tab + $
+			str_m20  + str_tab + $
+			str_m02	 + str_tab + $
+			str_m21	 + str_tab + $
+			str_m12	 + str_tab + $
+			str_m30	 + str_tab + $
+			str_m03	 + str_tab + $
+			str_m22	 + str_tab + $
+			str_m31	 + str_tab + $
+			str_m13  + str_tab + $
+			str_m40	 + str_tab + $
+			str_m04
+	ENDIF
+ENDIF
+
+;-----------------------------------------------------------------------------
+;-----------------------------------------------------------------------------
+;SIMPLE
+
+IF n_regs GE 1 THEN BEGIN
+
+	FOR i=0L, n_regs-1 DO BEGIN
+		regs_index[i] = i+1
+		arr_pospixel  = WHERE(image_mask EQ i+1)
+		smallimag     = binreg_isolate(arr_pospixel, XSIZE=xsize, YSIZE=ysize, /IMAGE)
+		smallimag_col = binreg_colorisolate(arr_pospixel, image_orig, XSIZE=xsize, YSIZE=ysize)
+		smallimag_r   = REFORM(smallimag_col[0,*,*])
+		smallimag_g   = REFORM(smallimag_col[1,*,*])
+		smallimag_b   = REFORM(smallimag_col[2,*,*])
+		arr_valuepixel_r = smallimag_r[WHERE(smallimag)]
+		arr_valuepixel_g = smallimag_g[WHERE(smallimag)]
+		arr_valuepixel_b = smallimag_b[WHERE(smallimag)]
+		IF opt_marked EQ 1 THEN BEGIN	; averiguar la clase marcada
+			regs_class[i] = im_marked[arr_pospixel[0]]
+			IF i EQ 56 THEN BEGIN
+				PRINT, 'Breakpoint'
+			ENDIF
+		ENDIF
+		IF opt_simple EQ 1 THEN BEGIN
+			regs_size[i]    = N_ELEMENTS(arr_pospixel)
+			regs_mean_r[i]  = MEAN(arr_valuepixel_r)
+			regs_mean_g[i]  = MEAN(arr_valuepixel_g)
+			regs_mean_b[i]  = MEAN(arr_valuepixel_b)
+			regs_stdv_r[i]  = SQRT(varianza(arr_valuepixel_r))
+			regs_stdv_g[i]  = SQRT(varianza(arr_valuepixel_g))
+			regs_stdv_b[i]  = SQRT(varianza(arr_valuepixel_b))
+			regs_peri[i]    = binreg_perimeter(smallimag)
+		ENDIF
+		IF opt_advanced EQ 1 THEN BEGIN
+			origin = Binreg_origin(arr_pospixel, XSIZE=xsize, YSIZE=ysize)
+			cmass  = Binreg_centermass(smallimag, /FLOATING)
+			gcmass = Binreg_centermass(smallimag, smallimag_g, /FLOATING)
+			regs_origin_x[i] = origin[0]
+			regs_origin_y[i] = origin[1]
+			regs_cmass_x[i]  = cmass[0]
+			regs_cmass_y[i]  = cmass[1]
+			regs_gcmass_x[i] = gcmass[0]
+			regs_gcmass_y[i] = gcmass[1]
+			regs_longdim[i]  = Binreg_longestDimension(smallimag)
+			regs_thinness[i] = Binreg_Thinness(smallimag)
+			regs_angle[i]    = Binreg_angle(smallimag)
+			regs_ffactor[i]  = Binreg_formfactor(smallimag)
+			regs_feretd[i]   = Binreg_feretdiameter(smallimag)
+			regs_compact[i]  = Binreg_compactness(smallimag)
+			regs_maxr[i]     = Binreg_maximumradius(smallimag)
+			regs_minr[i]     = Binreg_minimumradius(smallimag)
+			regs_maxdist[i]  = Binreg_maximumdistance(smallimag)
+			regs_rectness[i] = Binreg_rectangularity(smallimag)
+		ENDIF
+		IF opt_moments EQ 1 THEN BEGIN
+			regs_m11[i]  = Binreg_moments(smallimag, smallimag_g, NI=1, NJ=1, /NORMALIZE)
+			regs_m20[i]  = Binreg_moments(smallimag, smallimag_g, NI=2, NJ=0, /NORMALIZE)
+			regs_m02[i]  = Binreg_moments(smallimag, smallimag_g, NI=0, NJ=2, /NORMALIZE)
+			regs_m21[i]  = Binreg_moments(smallimag, smallimag_g, NI=2, NJ=1, /NORMALIZE)
+			regs_m12[i]  = Binreg_moments(smallimag, smallimag_g, NI=1, NJ=2, /NORMALIZE)
+			regs_m30[i]  = Binreg_moments(smallimag, smallimag_g, NI=3, NJ=0, /NORMALIZE)
+			regs_m03[i]  = Binreg_moments(smallimag, smallimag_g, NI=0, NJ=3, /NORMALIZE)
+			regs_m22[i]  = Binreg_moments(smallimag, smallimag_g, NI=2, NJ=2, /NORMALIZE)
+			regs_m31[i]  = Binreg_moments(smallimag, smallimag_g, NI=3, NJ=1, /NORMALIZE)
+			regs_m13[i]  = Binreg_moments(smallimag, smallimag_g, NI=1, NJ=3, /NORMALIZE)
+			regs_m40[i]  = Binreg_moments(smallimag, smallimag_g, NI=4, NJ=0, /NORMALIZE)
+			regs_m04[i]  = Binreg_moments(smallimag, smallimag_g, NI=0, NJ=4, /NORMALIZE)
+		ENDIF
+
+	ENDFOR
+
+;------------------------------------------------------
+
+		s_culture = culture
+		s_nimage  = n_image
+		s_index   = STRTRIM(STRING(regs_index,   FORMAT ='(I24)'), 2)
+		s_class   = STRTRIM(STRING(regs_class,   FORMAT ='(I24)'), 2)
+
+	IF opt_simple EQ 1 THEN BEGIN
+		s_size    = STRTRIM(STRING(regs_size,    FORMAT ='(I24)'), 2)
+		s_peri    = STRTRIM(STRING(regs_peri,    FORMAT ='(F33.8)'),2)
+		s_mean_r  = STRTRIM(STRING(regs_mean_r,  FORMAT ='(F33.8)'),2)
+		s_mean_g  = STRTRIM(STRING(regs_mean_g,  FORMAT ='(F33.8)'),2)
+		s_mean_b  = STRTRIM(STRING(regs_mean_b,  FORMAT ='(F33.8)'),2)
+		s_stdv_r  = STRTRIM(STRING(regs_stdv_r,  FORMAT ='(F33.8)'),2)
+		s_stdv_g  = STRTRIM(STRING(regs_stdv_g,  FORMAT ='(F33.8)'),2)
+		s_stdv_b  = STRTRIM(STRING(regs_stdv_b,  FORMAT ='(F33.8)'),2)
+	ENDIF
+	IF opt_advanced EQ 1 THEN BEGIN
+		s_origin_x = STRTRIM(STRING(regs_origin_x, FORMAT ='(I24)'), 2)
+		s_origin_y = STRTRIM(STRING(regs_origin_y, FORMAT ='(I24)'), 2)
+		s_cmass_x  = STRTRIM(STRING(regs_cmass_x,  FORMAT ='(F33.8)'), 2)
+		s_cmass_y  = STRTRIM(STRING(regs_cmass_y,  FORMAT ='(F33.8)'), 2)
+		s_gcmass_x = STRTRIM(STRING(regs_gcmass_x, FORMAT ='(F33.8)'), 2)
+		s_gcmass_y = STRTRIM(STRING(regs_gcmass_y, FORMAT ='(F33.8)'), 2)
+		s_longdim  = STRTRIM(STRING(regs_longdim,  FORMAT ='(F33.8)'), 2)
+		s_thinness = STRTRIM(STRING(regs_thinness, FORMAT ='(F33.8)'), 2)
+		s_angle    = STRTRIM(STRING(regs_angle,    FORMAT ='(F33.8)'), 2)
+		s_ffactor  = STRTRIM(STRING(regs_ffactor,  FORMAT ='(F33.8)'), 2)
+		s_feretd   = STRTRIM(STRING(regs_feretd,   FORMAT ='(F33.8)'), 2)
+		s_compact  = STRTRIM(STRING(regs_compact,  FORMAT ='(F33.8)'), 2)
+		s_maxr     = STRTRIM(STRING(regs_maxr,     FORMAT ='(F33.8)'), 2)
+		s_minr     = STRTRIM(STRING(regs_minr,     FORMAT ='(F33.8)'), 2)
+		s_maxdist  = STRTRIM(STRING(regs_maxdist,  FORMAT ='(F33.8)'), 2)
+		s_rectness = STRTRIM(STRING(regs_rectness, FORMAT ='(F33.8)'), 2)
+	ENDIF
+	IF opt_moments EQ 1 THEN BEGIN
+		s_m11    = STRTRIM(STRING(regs_m11,    FORMAT ='(F33.8)'), 2)
+		s_m20    = STRTRIM(STRING(regs_m20,    FORMAT ='(F33.8)'), 2)
+		s_m02    = STRTRIM(STRING(regs_m02,    FORMAT ='(F33.8)'), 2)
+		s_m21    = STRTRIM(STRING(regs_m21,    FORMAT ='(F33.8)'), 2)
+		s_m12    = STRTRIM(STRING(regs_m12,    FORMAT ='(F33.8)'), 2)
+		s_m30    = STRTRIM(STRING(regs_m30,    FORMAT ='(F33.8)'), 2)
+		s_m03    = STRTRIM(STRING(regs_m03,    FORMAT ='(F33.8)'), 2)
+		s_m22    = STRTRIM(STRING(regs_m22,    FORMAT ='(F33.8)'), 2)
+		s_m31    = STRTRIM(STRING(regs_m31,    FORMAT ='(F33.8)'), 2)
+		s_m13    = STRTRIM(STRING(regs_m13,    FORMAT ='(F33.8)'), 2)
+		s_m40    = STRTRIM(STRING(regs_m40,    FORMAT ='(F33.8)'), 2)
+		s_m04    = STRTRIM(STRING(regs_m04,    FORMAT ='(F33.8)'), 2)
+	ENDIF
+ENDIF
+
+;-----------------------------------------------------------------------------
+;-----------------------------------------------------------------------------
+
+OPENW, unit, file, /GET_LUN
+
+IF opt_head EQ 1 THEN BEGIN
+	PRINTF, unit, str_variables
+ENDIF
+
+IF n_regs GE 1 THEN BEGIN
+	FOR i=0L, n_regs-1 DO BEGIN
+
+			str_completeline = $
+				s_culture  + str_tab + $
+				s_nimage   + str_tab + $
+				s_index[i] + str_tab + $
+				s_class[i]
+
+		IF opt_simple EQ 1 THEN BEGIN
+			str_completeline = $
+				str_completeline + str_tab + $
+				s_size[i]  + str_tab + $
+				s_peri[i]  + str_tab + $
+				s_mean_r[i]  + str_tab + $
+				s_mean_g[i]  + str_tab + $
+				s_mean_b[i]  + str_tab + $
+				s_stdv_r[i]  + str_tab + $
+				s_stdv_g[i]  + str_tab + $
+				s_stdv_b[i]
+		ENDIF
+
+		IF opt_advanced EQ 1 THEN BEGIN
+			str_completeline = $
+				str_completeline + str_tab + $
+				s_origin_x[i] + str_tab + $
+				s_origin_y[i] + str_tab + $
+				s_cmass_x[i]  + str_tab + $
+				s_cmass_y[i]  + str_tab + $
+				s_gcmass_x[i] + str_tab + $
+				s_gcmass_y[i] + str_tab + $
+				s_longdim[i]  + str_tab + $
+				s_thinness[i] + str_tab + $
+				s_angle[i]    + str_tab + $
+				s_ffactor[i]  + str_tab + $
+				s_feretd[i]   + str_tab + $
+				s_compact[i]  + str_tab + $
+				s_maxr[i]     + str_tab + $
+				s_minr[i]     + str_tab + $
+				s_maxdist[i]  + str_tab + $
+				s_rectness[i]
+		ENDIF
+
+		IF opt_moments EQ 1 THEN BEGIN
+			str_completeline = $
+				str_completeline + str_tab + $
+				s_m11[i]  + str_tab + $
+				s_m20[i]  + str_tab + $
+				s_m02[i]  + str_tab + $
+				s_m21[i]  + str_tab + $
+				s_m12[i]  + str_tab + $
+				s_m30[i]  + str_tab + $
+				s_m03[i]  + str_tab + $
+				s_m22[i]  + str_tab + $
+				s_m31[i]  + str_tab + $
+				s_m13[i]  + str_tab + $
+				s_m40[i]  + str_tab + $
+				s_m04[i]
+		ENDIF
+
+		PRINTF, unit, str_completeline
+
+	ENDFOR
+ENDIF
+;------------------------------------------------------
+
+CLOSE, unit
+FREE_LUN, unit
+
+
+PRINT, 'Tiempo de proceso de una imagen (Write_SPSS_archive_2):  ', SYSTIME(1)-T
+
+RETURN, 1
+
+END
+
+
+
