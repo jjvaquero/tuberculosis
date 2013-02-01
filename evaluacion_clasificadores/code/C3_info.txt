@@ -1,0 +1,34 @@
+Hola José María,
+
+Te adjunto los siguientes archivos:
+
+Archivos_de_Procesamiento_KLK: Carpeta que contiene los m-files para calcular
+el kernel KL que mostramos en el CASEIB 2010.
+
+Validacion_Cruzada_con_la_Medida_F: Carpeta que contiene el codigo necesario
+para entrenar una SVM usando el kernel KL propuesto usando una validación
+cruzada basada en la medida F (esa fue la que mejor se comportaba ante una base
+de datos desbalanceada). Contiene también los mex-files de la Libsvm (libreria
+clasica para entrenar SVMs), tanto para windows como para Linux. En estos
+momentos deben haber versiones más actuales, puedes consultar en la página web
+de la libreria y descargarte la última versión. Esta carpeta contiene también
+un codigo donde entrenamos una máquina con el kernel KL propuesto, pero no
+estoy seguro si fue la ultima versión, lo siento mucho, pero tengo muchaaaassss
+versiones y no sé cual fue el definitivo (jejejeje, perdona el desorden, he
+aprendido de la experiencia y ahora trato de ser más ordenado con los codigos
+que programo :D). De todas maneras este archivo no es muy importante, tomalo
+solo como un ejemplito de como entrenarias una svm usando el kernel propuesto.
+Si me permites un humilde consejo, te aconsejaria que en lugar de trabajar con
+una svm trabajaras usando "Multiple Kernel Learning". En realidad, puedes usar
+cualquier método basado en kernels, y conectarle el kernel KL, o cual otro que
+sea de tu agrado (creo que sería interesante probar una combinación lineal de
+kernels).
+
+Por si acaso no los tienes, también te paso el artículo y la presentación del
+CAESIB 2010.
+
+Por favor disculpa si los códigos están desordenados y no están lo
+sufucientemente comentados!
+
+Casi lo olvido, respecto a tu pregunta, nosotros clasificabamos directamente
+pacientes, nuestra salida era sano o enfermo.
