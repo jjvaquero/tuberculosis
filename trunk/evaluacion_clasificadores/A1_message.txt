@@ -1,0 +1,20 @@
+Hola Chema,
+
+Te envío las funciones IDL del clasificador de bacilos.  Por desgracia la
+documentación brilla por su ausencia.
+
+La segmentación de nuestros bacilos se hizo mediante
+"fbatch_baciles_segment_1.pro" Después de segmentadas las imágenes, se
+cargarían junto con las máscaras mediante la función
+"fbatch_baciles_tospss_1.pro". El resultado se procesa mediante
+"Fbat_Classify_allMethods_loo.pro"
+
+
+No he encontrado al menos una función dll que se requiere para ejecutar una
+función watershed en un paso de la segmentación de imágenes (no en la
+clasificación) Si se necesita, se podría sustituir por la otra watershed en
+idl.
+
+Bueno, es un código muy "ad hoc" que se utilizó en su momento para evaluar unos
+clasificadores sobre una base de datos de bacilos de tuberculosis. Por aquí
+tengo parte de estas imágenes en un DVD. 
