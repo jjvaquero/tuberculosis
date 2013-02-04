@@ -1,3 +1,5 @@
-A1: code by Norberto Malpica, Juan Enrique Ortuño et al.
+C1: code by Norberto Malpica, Juan Enrique Ortuño et al. (LIM - UPM)
 
-A2: code by Forefo, Cristobal et al.
+C2: code by Forero, Cristobal et al. (CSIC)
+
+C3: code by Montoya et al. (UC3M)
