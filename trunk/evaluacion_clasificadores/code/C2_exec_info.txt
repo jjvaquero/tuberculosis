@@ -1,0 +1,1 @@
+Ejecutar TuberculosisMMG_batch desde Matlab. Tener en ese ordenador una carpeta con el path C:\img con los paquetes de imágenes a probar. Dentro de "img", cada paquete tiene que tener el mismo nombre en 2 niveles (Ejemplo: C:\img\001\001\) y dentro de ese path, las imágenes han de estar en formato bmp.
