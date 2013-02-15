@@ -1,6 +1,6 @@
 % pruebaAnalizaImagenSimple
 %load TrainOtherFeaturesBase5_RSM1_cm modelF_F2_F4_F6 mediaF_F2_F4_F6 desvF_F2_F4_F6
-load aux modelF_F2_F4_F6 mediaF_F2_F4_F6 desvF_F2_F4_F6
+load _aux modelF_F2_F4_F6 mediaF_F2_F4_F6 desvF_F2_F4_F6
 modelL=load(['Base5_RSM1_2nd_class_gauss_alldims_no_weights_' num2str(1)]);
 class3=modelL.model;
 class2=modelF_F2_F4_F6;
