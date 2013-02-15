@@ -57,7 +57,7 @@ tic,ynT{k}=analizaPacienteSimple(directorio,paciente,@RSM1,[],minPixels,media2,d
 %pause
 end
 
-save PruebaAnalizaPacienteSimple17 y*
+%save PruebaAnalizaPacienteSimple17 y*
 load PruebaAnalizaPacienteSimple17
 pacientes={'29994'  '30207'   '30214'  '30261' ... 
 '30262' '30304' '30619' '30663' '30783' '30825' '30855' '30877' '30880' ...
